@@ -12,8 +12,8 @@ build/
 .expo-shared/
 
 # Vaadin generated frontend
-src/main/frontend/generated/
-src/main/bundles/
+**/src/main/frontend/generated/
+**/src/main/bundles/
 .frontend.generated/
 vite.generated.ts
 
