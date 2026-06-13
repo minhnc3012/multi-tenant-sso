@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registered Clients — Identity Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        body { background: #f0f2f5; padding-top: 2rem; }
+        .card { border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .secret-field { font-family: monospace; background: #f8f9fa; border: 1px solid #dee2e6; padding: 6px 10px; border-radius: 4px; }
+        .badge-grant { font-size: 0.75rem; }
+        .actions .btn { margin-right: 4px; }
+        .spinner-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(255,255,255,0.8); display:flex; align-items:center; justify-content:center; z-index:9999; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h3><i class="bi bi-key"></i> Registered Clients</h3>
+        <button class="btn btn-primary" onclick="showCreateModal()"><i class="bi bi-plus-lg"></i> Add Client</button>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <div id="spinner" class="spinner-overlay d-none">
+                <div class="spinner-border text-primary" role="status"></div>
+            </div>
+            <div id="error" class="alert alert-danger d-none" role="alert"></div>
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Client ID</th>
+                        <th>Client Name</th>
+                        <th>Grant Types</th>
+                        <th>Redirect URIs</th>
+                        <th>Scopes</th>
+                        <th>Auth Methods</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="clientsTable"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Create Modal -->
+<div class="modal fade" id="createModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create Registered Client</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3"><label class="form-label">Client ID *</label><input id="c-clientId" class="form-control" placeholder="my-app-client"></div>
+                <div class="mb-3"><label class="form-label">Client Name *</label><input id="c-clientName" class="form-control" placeholder="My Application"></div>
+                <div class="mb-3"><label class="form-label">Client Secret *</label><input id="c-clientSecret" class="form-control" placeholder="auto-generate" value=""></div>
+                <div class="mb-3"><label class="form-label">Redirect URIs (comma-separated)</label><input id="c-redirectUris" class="form-control" placeholder="https://myapp.com/callback"></div>
+                <div class="mb-3"><label class="form-label">Scopes (comma-separated)</label><input id="c-scopes" class="form-control" value="openid,profile,email" placeholder="openid,profile,email"></div>
+                <div class="mb-3"><label class="form-label">Grant Types (comma-separated)</label><input id="c-grantTypes" class="form-control" value="authorization_code,refresh_token" placeholder="authorization_code,refresh_token"></div>
+                <div class="mb-3"><label class="form-label">Auth Methods</label><input id="c-authMethods" class="form-control" value="client_secret_basic" placeholder="client_secret_basic"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="createClient()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Client</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="e-id">
+                <div class="mb-3"><label class="form-label">Client Name</label><input id="e-clientName" class="form-control"></div>
+                <div class="mb-3"><label class="form-label">Redirect URIs</label><input id="e-redirectUris" class="form-control"></div>
+                <div class="mb-3"><label class="form-label">Scopes</label><input id="e-scopes" class="form-control"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="updateClient()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rotate Secret Modal -->
+<div class="modal fade" id="secretModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Rotate Client Secret</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="s-id">
+                <div class="mb-3"><label class="form-label">New Secret *</label><input id="s-newSecret" class="form-control" placeholder="Enter new secret"></div>
+                <div id="s-current" class="secret-field d-none"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-warning" onclick="rotateSecret()">Rotate</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const API = '/api/v1/registered-clients';
+
+function showSpinner(show) {
+    document.getElementById('spinner').classList.toggle('d-none', !show);
+}
+
+function showError(msg) {
+    const el = document.getElementById('error');
+    el.textContent = msg;
+    el.classList.remove('d-none');
+    setTimeout(() => el.classList.add('d-none'), 5000);
+}
+
+async function fetchClients() {
+    showSpinner(true);
+    try {
+        const res = await fetch(API);
+        if (!res.ok) throw new Error('Failed to load clients: ' + res.status);
+        return await res.json();
+    } catch (e) {
+        showError(e.message);
+        return [];
+    } finally {
+        showSpinner(false);
+    }
+}
+
+function formatUris(uris) {
+    if (!uris) return '<span class="text-muted">—</span>';
+    return uris.split(',').map(u => `<code>${u.trim()}</code>`).join(', ');
+}
+
+function formatScopes(scopes) {
+    if (!scopes) return '<span class="text-muted">—</span>';
+    return scopes.split(',').map(s => `<span class="badge bg-info badge-grant">${s.trim()}</span>`).join(' ');
+}
+
+function renderTable(clients) {
+    const tbody = document.getElementById('clientsTable');
+    if (!clients.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No registered clients found</td></tr>';
+        return;
+    }
+    tbody.innerHTML = clients.map(c => `
+        <tr>
+            <td><strong>${c.client_id}</strong></td>
+            <td>${c.client_name}</td>
+            <td>${formatGrants(c.authorization_grant_types)}</td>
+            <td>${formatUris(c.redirect_uris)}</td>
+            <td>${formatScopes(c.scopes)}</td>
+            <td>${formatUris(c.client_authentication_methods)}</td>
+            <td class="actions">
+                <button class="btn btn-sm btn-outline-primary" onclick="fillEditModal('${c.id}','${c.client_name}','${c.redirect_uris}','${c.scopes}')"><i class="bi bi-pencil"></i></button>
+                <button class="btn btn-sm btn-outline-warning" onclick="showSecretModal('${c.id}')"><i class="bi bi-key"></i></button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteClient('${c.id}','${c.client_id}')"><i class="bi bi-trash"></i></button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function formatGrants(grants) {
+    if (!grants) return '<span class="text-muted">—</span>';
+    return grants.split(',').map(g => `<span class="badge bg-secondary badge-grant">${g.trim()}</span>`).join(' ');
+}
+
+async function loadClients() {
+    const clients = await fetchClients();
+    renderTable(clients);
+}
+
+function showCreateModal() {
+    new bootstrap.Modal(document.getElementById('createModal')).show();
+}
+
+async function createClient() {
+    const payload = {
+        clientId: document.getElementById('c-clientId').value.trim(),
+        clientName: document.getElementById('c-clientName').value.trim(),
+        clientSecret: document.getElementById('c-clientSecret').value.trim(),
+        redirectUris: document.getElementById('c-redirectUris').value.trim(),
+        scopes: document.getElementById('c-scopes').value.trim(),
+        authorizationGrantTypes: document.getElementById('c-grantTypes').value.trim(),
+        clientAuthenticationMethods: document.getElementById('c-authMethods').value.trim()
+    };
+    if (!payload.clientId || !payload.clientName || !payload.clientSecret) {
+        showError('ClientId, ClientName, ClientSecret are required');
+        return;
+    }
+    try {
+        const res = await fetch(API, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Create failed: ' + res.status);
+        bootstrap.Modal.getInstance(document.getElementById('createModal')).hide();
+        loadClients();
+    } catch (e) {
+        showError(e.message);
+    }
+}
+
+function fillEditModal(id, name, uris, scopes) {
+    document.getElementById('e-id').value = id;
+    document.getElementById('e-clientName').value = name || '';
+    document.getElementById('e-redirectUris').value = uris || '';
+    document.getElementById('e-scopes').value = scopes || '';
+    new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+
+async function updateClient() {
+    const id = document.getElementById('e-id').value;
+    const payload = {
+        clientName: document.getElementById('e-clientName').value.trim(),
+        redirectUris: document.getElementById('e-redirectUris').value.trim(),
+        scopes: document.getElementById('e-scopes').value.trim()
+    };
+    try {
+        // Use rotate-secret endpoint pattern for PUT
+        const res = await fetch(`${API}/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Update failed: ' + res.status);
+        bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+        loadClients();
+    } catch (e) {
+        showError(e.message);
+    }
+}
+
+function showSecretModal(id) {
+    document.getElementById('s-id').value = id;
+    new bootstrap.Modal(document.getElementById('secretModal')).show();
+}
+
+async function rotateSecret() {
+    const id = document.getElementById('s-id').value;
+    const newSecret = document.getElementById('s-newSecret').value.trim();
+    if (!newSecret) { showError('New secret is required'); return; }
+    try {
+        const res = await fetch(`${API}/rotate-secret/${id}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ newSecret })
+        });
+        if (!res.ok) throw new Error('Rotate failed: ' + res.status);
+        bootstrap.Modal.getInstance(document.getElementById('secretModal')).hide();
+        loadClients();
+    } catch (e) {
+        showError(e.message);
+    }
+}
+
+async function deleteClient(id, clientId) {
+    if (!confirm(`Delete client "${clientId}"?`)) return;
+    try {
+        const res = await fetch(`${API}/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed: ' + res.status);
+        loadClients();
+    } catch (e) {
+        showError(e.message);
+    }
+}
+
+// Initial load
+loadClients();
+</script>
+</body>
+</html>

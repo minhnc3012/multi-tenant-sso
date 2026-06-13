@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  id="Definitions_PKCE"
+  targetNamespace="http://identityplatform.com/bpmn">
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PROCESS: OAuth2 Authorization Code + PKCE Login Flow
+       Actors  : User | Mobile App (Expo) | Auth Server (port 8080)
+       App     : mobile-client-sample  (Expo, expo-auth-session)
+       ═══════════════════════════════════════════════════════════════════ -->
+
+  <bpmn:collaboration id="Collab_PKCE">
+    <bpmn:participant id="Pool_User"       name="User"                      processRef="Proc_User"/>
+    <bpmn:participant id="Pool_App"        name="Mobile App (Expo PKCE)"    processRef="Proc_App"/>
+    <bpmn:participant id="Pool_AuthServer" name="Auth Server  :8080"        processRef="Proc_Auth"/>
+
+    <!-- Message flows across pool boundaries -->
+    <bpmn:messageFlow id="MF_1" name="GET /oauth2/authorize\n?code_challenge=S256..."
+      sourceRef="Task_OpenBrowser"     targetRef="Start_Auth_Authorize"/>
+    <bpmn:messageFlow id="MF_2" name="Redirect /callback\n?code=AUTH_CODE"
+      sourceRef="Task_IssueCode"       targetRef="Task_ReceiveCode"/>
+    <bpmn:messageFlow id="MF_3" name="POST /oauth2/token\ncode + code_verifier"
+      sourceRef="Task_ExchangeToken"   targetRef="Task_ValidatePKCE"/>
+    <bpmn:messageFlow id="MF_4" name="{access_token}"
+      sourceRef="Task_SignAndReturn"   targetRef="Task_StoreToken"/>
+  </bpmn:collaboration>
+
+  <!-- ─── USER PROCESS ─────────────────────────────────────────────── -->
+  <bpmn:process id="Proc_User" isExecutable="false">
+    <bpmn:startEvent id="Start_User" name="Mở app"/>
+    <bpmn:userTask   id="Task_TapLogin"        name="Bấm 'Sign In'"/>
+    <bpmn:userTask   id="Task_EnterCreds"      name="Nhập email / password&#10;(trong browser popup)"/>
+    <bpmn:userTask   id="Task_ViewDashboard"   name="Xem Dashboard&#10;(JWT claims hiển thị)"/>
+    <bpmn:endEvent   id="End_User"             name="Đã đăng nhập thành công"/>
+
+    <bpmn:sequenceFlow id="SF_U1" sourceRef="Start_User"      targetRef="Task_TapLogin"/>
+    <bpmn:sequenceFlow id="SF_U2" sourceRef="Task_TapLogin"   targetRef="Task_EnterCreds"/>
+    <bpmn:sequenceFlow id="SF_U3" sourceRef="Task_EnterCreds" targetRef="Task_ViewDashboard"/>
+    <bpmn:sequenceFlow id="SF_U4" sourceRef="Task_ViewDashboard" targetRef="End_User"/>
+  </bpmn:process>
+
+  <!-- ─── MOBILE APP PROCESS ──────────────────────────────────────── -->
+  <bpmn:process id="Proc_App" isExecutable="false">
+    <bpmn:startEvent id="Start_App"/>
+    <bpmn:serviceTask id="Task_GenPKCE"        name="Generate PKCE&#10;code_verifier (random 64B)&#10;code_challenge = S256(verifier)"/>
+    <bpmn:serviceTask id="Task_OpenBrowser"    name="Mở WebBrowser&#10;expo-auth-session&#10;→ /oauth2/authorize"/>
+    <bpmn:serviceTask id="Task_ReceiveCode"    name="Nhận callback&#10;/callback?code=AUTH_CODE"/>
+    <bpmn:serviceTask id="Task_ExchangeToken"  name="POST /oauth2/token&#10;grant_type=authorization_code&#10;code + code_verifier"/>
+    <bpmn:serviceTask id="Task_StoreToken"     name="Lưu access_token&#10;(SecureStore / AsyncStorage)"/>
+    <bpmn:serviceTask id="Task_DecodeJWT"      name="Decode JWT claims&#10;org_id, roles, permissions"/>
+    <bpmn:endEvent    id="End_App"             name="Navigate → Dashboard"/>
+
+    <bpmn:sequenceFlow id="SF_A1" sourceRef="Start_App"          targetRef="Task_GenPKCE"/>
+    <bpmn:sequenceFlow id="SF_A2" sourceRef="Task_GenPKCE"       targetRef="Task_OpenBrowser"/>
+    <bpmn:sequenceFlow id="SF_A3" sourceRef="Task_OpenBrowser"   targetRef="Task_ReceiveCode"/>
+    <bpmn:sequenceFlow id="SF_A4" sourceRef="Task_ReceiveCode"   targetRef="Task_ExchangeToken"/>
+    <bpmn:sequenceFlow id="SF_A5" sourceRef="Task_ExchangeToken" targetRef="Task_StoreToken"/>
+    <bpmn:sequenceFlow id="SF_A6" sourceRef="Task_StoreToken"    targetRef="Task_DecodeJWT"/>
+    <bpmn:sequenceFlow id="SF_A7" sourceRef="Task_DecodeJWT"     targetRef="End_App"/>
+  </bpmn:process>
+
+  <!-- ─── AUTH SERVER PROCESS ─────────────────────────────────────── -->
+  <bpmn:process id="Proc_Auth" isExecutable="false">
+    <bpmn:startEvent  id="Start_Auth_Authorize" name="Nhận /oauth2/authorize"/>
+
+    <bpmn:serviceTask id="Task_OrgCheck"     name="OrgClientAuthorizationFilter&#10;user.orgId == client.orgId?"/>
+    <bpmn:exclusiveGateway id="GW_OrgMatch"  name="Org khớp?"/>
+
+    <bpmn:serviceTask id="Task_ShowLogin"    name="Hiện /login page&#10;(Thymeleaf template)"/>
+    <bpmn:serviceTask id="Task_Authenticate" name="Xác thực User&#10;MultiTenantUserDetailsService&#10;→ PostgreSQL"/>
+    <bpmn:exclusiveGateway id="GW_AuthOK"    name="Xác thực thành công?"/>
+
+    <bpmn:serviceTask id="Task_IssueCode"    name="Cấp authorization_code&#10;Lưu vào oauth2_authorization&#10;TTL: 10 phút"/>
+    <bpmn:startEvent  id="Start_Auth_Token"  name="Nhận /oauth2/token"/>
+    <bpmn:serviceTask id="Task_ValidatePKCE" name="Validate PKCE&#10;SHA-256(code_verifier) == code_challenge"/>
+    <bpmn:exclusiveGateway id="GW_PKCEok"    name="PKCE hợp lệ?"/>
+    <bpmn:serviceTask id="Task_CustomClaims" name="MultiTenantTokenCustomizer&#10;Inject: org_id, roles, permissions"/>
+    <bpmn:serviceTask id="Task_SignAndReturn" name="Sign JWT (RSA-256)&#10;Key từ auth_key_pair table (V14)&#10;kid stable across restarts"/>
+
+    <bpmn:endEvent id="End_Auth_Denied"  name="Redirect /error/org-access-denied"/>
+    <bpmn:endEvent id="End_Auth_BadCred" name="401 Bad Credentials"/>
+    <bpmn:endEvent id="End_Auth_BadPKCE" name="400 invalid_grant"/>
+    <bpmn:endEvent id="End_Auth_Success" name="200 {access_token}"/>
+
+    <bpmn:sequenceFlow id="SF_AS1"  sourceRef="Start_Auth_Authorize" targetRef="Task_OrgCheck"/>
+    <bpmn:sequenceFlow id="SF_AS2"  sourceRef="Task_OrgCheck"        targetRef="GW_OrgMatch"/>
+    <bpmn:sequenceFlow id="SF_AS3"  name="No"  sourceRef="GW_OrgMatch"  targetRef="End_Auth_Denied"/>
+    <bpmn:sequenceFlow id="SF_AS4"  name="Yes" sourceRef="GW_OrgMatch"  targetRef="Task_ShowLogin"/>
+    <bpmn:sequenceFlow id="SF_AS5"  sourceRef="Task_ShowLogin"       targetRef="Task_Authenticate"/>
+    <bpmn:sequenceFlow id="SF_AS6"  sourceRef="Task_Authenticate"    targetRef="GW_AuthOK"/>
+    <bpmn:sequenceFlow id="SF_AS7"  name="No"  sourceRef="GW_AuthOK"   targetRef="End_Auth_BadCred"/>
+    <bpmn:sequenceFlow id="SF_AS8"  name="Yes" sourceRef="GW_AuthOK"   targetRef="Task_IssueCode"/>
+    <bpmn:sequenceFlow id="SF_AS9"  sourceRef="Start_Auth_Token"     targetRef="Task_ValidatePKCE"/>
+    <bpmn:sequenceFlow id="SF_AS10" sourceRef="Task_ValidatePKCE"    targetRef="GW_PKCEok"/>
+    <bpmn:sequenceFlow id="SF_AS11" name="No"  sourceRef="GW_PKCEok"   targetRef="End_Auth_BadPKCE"/>
+    <bpmn:sequenceFlow id="SF_AS12" name="Yes" sourceRef="GW_PKCEok"   targetRef="Task_CustomClaims"/>
+    <bpmn:sequenceFlow id="SF_AS13" sourceRef="Task_CustomClaims"    targetRef="Task_SignAndReturn"/>
+    <bpmn:sequenceFlow id="SF_AS14" sourceRef="Task_SignAndReturn"   targetRef="End_Auth_Success"/>
+  </bpmn:process>
+
+  <!-- ═══════════════════════════════ DIAGRAM LAYOUT ════════════════ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collab_PKCE">
+
+      <!-- USER POOL -->
+      <bpmndi:BPMNShape id="S_Pool_User" bpmnElement="Pool_User" isHorizontal="true">
+        <dc:Bounds x="120" y="80"  width="1560" height="130"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_User"       bpmnElement="Start_User">        <dc:Bounds x="192" y="127" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_TapLogin"         bpmnElement="Task_TapLogin">     <dc:Bounds x="280" y="108" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_EnterCreds"       bpmnElement="Task_EnterCreds">   <dc:Bounds x="700" y="108" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ViewDashboard"    bpmnElement="Task_ViewDashboard"><dc:Bounds x="1310" y="108" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_User"         bpmnElement="End_User">          <dc:Bounds x="1510" y="127" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge  id="E_U1" bpmnElement="SF_U1"><di:waypoint x="228" y="145"/><di:waypoint x="280" y="145"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge  id="E_U2" bpmnElement="SF_U2"><di:waypoint x="410" y="145"/><di:waypoint x="700" y="145"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge  id="E_U3" bpmnElement="SF_U3"><di:waypoint x="840" y="145"/><di:waypoint x="1310" y="145"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge  id="E_U4" bpmnElement="SF_U4"><di:waypoint x="1440" y="145"/><di:waypoint x="1510" y="145"/></bpmndi:BPMNEdge>
+
+      <!-- MOBILE APP POOL -->
+      <bpmndi:BPMNShape id="S_Pool_App" bpmnElement="Pool_App" isHorizontal="true">
+        <dc:Bounds x="120" y="240" width="1560" height="150"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_App"     bpmnElement="Start_App">          <dc:Bounds x="192" y="297" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GenPKCE"       bpmnElement="Task_GenPKCE">       <dc:Bounds x="280" y="278" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_OpenBrowser"   bpmnElement="Task_OpenBrowser">   <dc:Bounds x="490" y="278" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ReceiveCode"   bpmnElement="Task_ReceiveCode">   <dc:Bounds x="850" y="278" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ExchangeToken" bpmnElement="Task_ExchangeToken"> <dc:Bounds x="1050" y="278" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_StoreToken"    bpmnElement="Task_StoreToken">    <dc:Bounds x="1260" y="278" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_DecodeJWT"     bpmnElement="Task_DecodeJWT">     <dc:Bounds x="1460" y="278" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_App"       bpmnElement="End_App">            <dc:Bounds x="1660" y="297" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_A1" bpmnElement="SF_A1"><di:waypoint x="228" y="315"/><di:waypoint x="280" y="315"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_A2" bpmnElement="SF_A2"><di:waypoint x="430" y="315"/><di:waypoint x="490" y="315"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_A3" bpmnElement="SF_A3"><di:waypoint x="640" y="315"/><di:waypoint x="850" y="315"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_A4" bpmnElement="SF_A4"><di:waypoint x="990" y="315"/><di:waypoint x="1050" y="315"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_A5" bpmnElement="SF_A5"><di:waypoint x="1200" y="315"/><di:waypoint x="1260" y="315"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_A6" bpmnElement="SF_A6"><di:waypoint x="1400" y="315"/><di:waypoint x="1460" y="315"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_A7" bpmnElement="SF_A7"><di:waypoint x="1600" y="315"/><di:waypoint x="1660" y="315"/></bpmndi:BPMNEdge>
+
+      <!-- AUTH SERVER POOL -->
+      <bpmndi:BPMNShape id="S_Pool_Auth" bpmnElement="Pool_AuthServer" isHorizontal="true">
+        <dc:Bounds x="120" y="420" width="1560" height="250"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Auth_Authorize" bpmnElement="Start_Auth_Authorize"><dc:Bounds x="490" y="467" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_OrgCheck"      bpmnElement="Task_OrgCheck">      <dc:Bounds x="576" y="448" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_OrgMatch"   bpmnElement="GW_OrgMatch"  isMarkerVisible="true"><dc:Bounds x="776" y="460" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ShowLogin"     bpmnElement="Task_ShowLogin">     <dc:Bounds x="700" y="560" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Authenticate"  bpmnElement="Task_Authenticate">  <dc:Bounds x="890" y="448" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_AuthOK"     bpmnElement="GW_AuthOK"    isMarkerVisible="true"><dc:Bounds x="1090" y="460" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_IssueCode"     bpmnElement="Task_IssueCode">     <dc:Bounds x="1190" y="448" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Auth_Token" bpmnElement="Start_Auth_Token"><dc:Bounds x="1050" y="567" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ValidatePKCE"  bpmnElement="Task_ValidatePKCE">  <dc:Bounds x="1140" y="548" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_PKCEok"     bpmnElement="GW_PKCEok"    isMarkerVisible="true"><dc:Bounds x="1340" y="560" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_CustomClaims"  bpmnElement="Task_CustomClaims">  <dc:Bounds x="1410" y="448" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SignAndReturn" bpmnElement="Task_SignAndReturn">  <dc:Bounds x="1600" y="448" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Auth_Denied"  bpmnElement="End_Auth_Denied">  <dc:Bounds x="890" y="577" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Auth_BadCred" bpmnElement="End_Auth_BadCred"><dc:Bounds x="1190" y="577" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Auth_BadPKCE" bpmnElement="End_Auth_BadPKCE"><dc:Bounds x="1440" y="577" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Auth_Success" bpmnElement="End_Auth_Success"><dc:Bounds x="1800" y="467" width="36" height="36"/></bpmndi:BPMNShape>
+      <!-- sequence flows auth -->
+      <bpmndi:BPMNEdge id="E_AS1"  bpmnElement="SF_AS1"> <di:waypoint x="526" y="485"/><di:waypoint x="576" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS2"  bpmnElement="SF_AS2"> <di:waypoint x="726" y="485"/><di:waypoint x="776" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS3"  bpmnElement="SF_AS3"> <di:waypoint x="801" y="510"/><di:waypoint x="801" y="595"/><di:waypoint x="890" y="595"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS4"  bpmnElement="SF_AS4"> <di:waypoint x="776" y="485"/><di:waypoint x="700" y="485"/><di:waypoint x="700" y="560"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS5"  bpmnElement="SF_AS5"> <di:waypoint x="770" y="597"/><di:waypoint x="890" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS6"  bpmnElement="SF_AS6"> <di:waypoint x="1040" y="485"/><di:waypoint x="1090" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS7"  bpmnElement="SF_AS7"> <di:waypoint x="1115" y="510"/><di:waypoint x="1115" y="595"/><di:waypoint x="1190" y="595"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS8"  bpmnElement="SF_AS8"> <di:waypoint x="1140" y="485"/><di:waypoint x="1190" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS9"  bpmnElement="SF_AS9"> <di:waypoint x="1086" y="585"/><di:waypoint x="1140" y="585"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS10" bpmnElement="SF_AS10"><di:waypoint x="1290" y="585"/><di:waypoint x="1340" y="585"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS11" bpmnElement="SF_AS11"><di:waypoint x="1365" y="610"/><di:waypoint x="1365" y="620"/><di:waypoint x="1458" y="620"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS12" bpmnElement="SF_AS12"><di:waypoint x="1365" y="560"/><di:waypoint x="1365" y="485"/><di:waypoint x="1410" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS13" bpmnElement="SF_AS13"><di:waypoint x="1560" y="485"/><di:waypoint x="1600" y="485"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS14" bpmnElement="SF_AS14"><di:waypoint x="1750" y="485"/><di:waypoint x="1800" y="485"/></bpmndi:BPMNEdge>
+
+      <!-- Message flow edges -->
+      <bpmndi:BPMNEdge id="E_MF1" bpmnElement="MF_1">
+        <di:waypoint x="565" y="315"/><di:waypoint x="508" y="390"/><di:waypoint x="508" y="467"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF2" bpmnElement="MF_2">
+        <di:waypoint x="1265" y="448"/><di:waypoint x="1265" y="390"/><di:waypoint x="920" y="390"/><di:waypoint x="920" y="352"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF3" bpmnElement="MF_3">
+        <di:waypoint x="1125" y="352"/><di:waypoint x="1125" y="400"/><di:waypoint x="1068" y="400"/><di:waypoint x="1068" y="567"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF4" bpmnElement="MF_4">
+        <di:waypoint x="1675" y="448"/><di:waypoint x="1675" y="390"/><di:waypoint x="1330" y="390"/><di:waypoint x="1330" y="352"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

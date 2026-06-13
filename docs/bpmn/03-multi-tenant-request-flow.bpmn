@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  id="Definitions_MultiTenant"
+  targetNamespace="http://identityplatform.com/bpmn">
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PROCESS: Multi-tenant API Request Processing
+       Shows how any authenticated request flows through all 4 isolation layers:
+         1. TenantResolutionFilter (detect tenant)
+         2. Spring Security (JWT validation)
+         3. Service Layer (@PreAuthorize)
+         4. PostgreSQL RLS (database enforcement)
+       ═══════════════════════════════════════════════════════════════════ -->
+
+  <bpmn:process id="Proc_MultiTenant" isExecutable="false">
+    <bpmn:laneSet id="LaneSet_1">
+
+      <bpmn:lane id="Lane_Client"    name="Client App&#10;(Browser / Mobile / API)">
+        <bpmn:flowNodeRef>Start_Request</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_PrepareReq</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_ReceiveResp</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_Success</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_Error</bpmn:flowNodeRef>
+      </bpmn:lane>
+
+      <bpmn:lane id="Lane_Filter"    name="Filter Chain&#10;(TenantResolution + RateLimit)">
+        <bpmn:flowNodeRef>Task_ResolveTenant</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>GW_TenantFound</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_SetTenantCtx</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_TenantNotFound</bpmn:flowNodeRef>
+      </bpmn:lane>
+
+      <bpmn:lane id="Lane_Security"  name="Spring Security&#10;(JWT Validation + Authorization)">
+        <bpmn:flowNodeRef>Task_ExtractJWT</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_ValidateSig</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>GW_JWTValid</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_ExtractClaims</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_PreAuthorize</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>GW_Authorized</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_401</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_403</bpmn:flowNodeRef>
+      </bpmn:lane>
+
+      <bpmn:lane id="Lane_Service"   name="Service Layer&#10;(@Transactional)">
+        <bpmn:flowNodeRef>Task_ServiceLogic</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_BuildQuery</bpmn:flowNodeRef>
+      </bpmn:lane>
+
+      <bpmn:lane id="Lane_DB"        name="Database Layer&#10;(TenantAwareDataSource + PostgreSQL RLS)">
+        <bpmn:flowNodeRef>Task_SetRLS</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_ExecQuery</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_RLSPolicy</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>GW_RLSOk</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_ReturnData</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_ClearCtx</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_DB_Blocked</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End_DB_Done</bpmn:flowNodeRef>
+      </bpmn:lane>
+
+    </bpmn:laneSet>
+
+    <!-- CLIENT LANE -->
+    <bpmn:startEvent id="Start_Request"  name="HTTP Request&#10;GET/POST /api/v1/**&#10;Authorization: Bearer JWT"/>
+    <bpmn:serviceTask id="Task_PrepareReq" name="Attach JWT&#10;(từ SecureStore / session)"/>
+    <bpmn:serviceTask id="Task_ReceiveResp" name="Nhận response&#10;Data đã filter theo org_id"/>
+    <bpmn:endEvent   id="End_Success"    name="200 OK"/>
+    <bpmn:endEvent   id="End_Error"      name="4xx Error"/>
+
+    <!-- FILTER LANE -->
+    <bpmn:serviceTask id="Task_ResolveTenant" name="TenantResolutionFilter&#10;Priority 1: X-Organization-Slug header&#10;Priority 2: subdomain {slug}.platform.com&#10;Priority 3: /api/v1/t/{slug}/...&#10;Fallback: email domain (JWT sub claim)"/>
+    <bpmn:exclusiveGateway id="GW_TenantFound" name="Tenant&#10;found?"/>
+    <bpmn:serviceTask id="Task_SetTenantCtx"  name="TenantContext.set(orgId)&#10;ThreadLocal — cleared in finally"/>
+    <bpmn:endEvent    id="End_TenantNotFound"  name="400 Tenant not found"/>
+
+    <!-- SECURITY LANE -->
+    <bpmn:serviceTask id="Task_ExtractJWT"   name="Extract Bearer token&#10;Authorization: Bearer eyJ..."/>
+    <bpmn:serviceTask id="Task_ValidateSig"  name="Validate JWT signature&#10;JWKS → auth_key_pair (V14)&#10;Verify exp, iss, nbf"/>
+    <bpmn:exclusiveGateway id="GW_JWTValid" name="JWT valid?"/>
+    <bpmn:serviceTask id="Task_ExtractClaims" name="Extract claims&#10;sub → userId&#10;org_id → organizationId&#10;roles → GrantedAuthority"/>
+    <bpmn:serviceTask id="Task_PreAuthorize" name="@PreAuthorize&#10;hasRole('ORG_ADMIN') or isSelf(userId)"/>
+    <bpmn:exclusiveGateway id="GW_Authorized" name="Authorized?"/>
+    <bpmn:endEvent   id="End_401"            name="401 Unauthorized"/>
+    <bpmn:endEvent   id="End_403"            name="403 Forbidden"/>
+
+    <!-- SERVICE LANE -->
+    <bpmn:serviceTask id="Task_ServiceLogic" name="Business Logic&#10;(e.g. UserService.getUsers())"/>
+    <bpmn:serviceTask id="Task_BuildQuery"   name="Build JPA query&#10;findByOrganizationId(orgId)&#10;App-layer tenant filter"/>
+
+    <!-- DB LANE -->
+    <bpmn:serviceTask id="Task_SetRLS"     name="TenantAwareDataSource.getConnection()&#10;SET app.tenant_id = '{orgId}'&#10;SET app.is_platform_admin = '{bool}'"/>
+    <bpmn:serviceTask id="Task_ExecQuery"  name="Execute SQL query"/>
+    <bpmn:serviceTask id="Task_RLSPolicy"  name="PostgreSQL RLS Policy&#10;WHERE organization_id::text&#10;  = current_setting('app.tenant_id')"/>
+    <bpmn:exclusiveGateway id="GW_RLSOk"  name="Passes RLS?"/>
+    <bpmn:serviceTask id="Task_ReturnData" name="Return result set&#10;(scoped to tenant)"/>
+    <bpmn:serviceTask id="Task_ClearCtx"   name="TenantContext.clear()&#10;in finally block&#10;(prevent thread leak)"/>
+    <bpmn:endEvent   id="End_DB_Blocked"   name="0 rows (RLS blocked)"/>
+    <bpmn:endEvent   id="End_DB_Done"      name="Commit + return"/>
+
+    <!-- ─── SEQUENCE FLOWS ────────────────────────────────────────── -->
+    <!-- Client -->
+    <bpmn:sequenceFlow id="SF_C1" sourceRef="Start_Request"   targetRef="Task_PrepareReq"/>
+    <bpmn:sequenceFlow id="SF_C2" sourceRef="Task_PrepareReq" targetRef="Task_ResolveTenant"/>
+
+    <!-- Filter -->
+    <bpmn:sequenceFlow id="SF_F1" sourceRef="Task_ResolveTenant" targetRef="GW_TenantFound"/>
+    <bpmn:sequenceFlow id="SF_F2" name="No"  sourceRef="GW_TenantFound" targetRef="End_TenantNotFound"/>
+    <bpmn:sequenceFlow id="SF_F3" name="Yes" sourceRef="GW_TenantFound" targetRef="Task_SetTenantCtx"/>
+    <bpmn:sequenceFlow id="SF_F4" sourceRef="Task_SetTenantCtx" targetRef="Task_ExtractJWT"/>
+
+    <!-- Security -->
+    <bpmn:sequenceFlow id="SF_S1" sourceRef="Task_ExtractJWT"    targetRef="Task_ValidateSig"/>
+    <bpmn:sequenceFlow id="SF_S2" sourceRef="Task_ValidateSig"   targetRef="GW_JWTValid"/>
+    <bpmn:sequenceFlow id="SF_S3" name="No"  sourceRef="GW_JWTValid"  targetRef="End_401"/>
+    <bpmn:sequenceFlow id="SF_S4" name="Yes" sourceRef="GW_JWTValid"  targetRef="Task_ExtractClaims"/>
+    <bpmn:sequenceFlow id="SF_S5" sourceRef="Task_ExtractClaims" targetRef="Task_PreAuthorize"/>
+    <bpmn:sequenceFlow id="SF_S6" sourceRef="Task_PreAuthorize"  targetRef="GW_Authorized"/>
+    <bpmn:sequenceFlow id="SF_S7" name="No"  sourceRef="GW_Authorized" targetRef="End_403"/>
+    <bpmn:sequenceFlow id="SF_S8" name="Yes" sourceRef="GW_Authorized" targetRef="Task_ServiceLogic"/>
+
+    <!-- Service -->
+    <bpmn:sequenceFlow id="SF_SV1" sourceRef="Task_ServiceLogic" targetRef="Task_BuildQuery"/>
+    <bpmn:sequenceFlow id="SF_SV2" sourceRef="Task_BuildQuery"   targetRef="Task_SetRLS"/>
+
+    <!-- DB -->
+    <bpmn:sequenceFlow id="SF_D1" sourceRef="Task_SetRLS"      targetRef="Task_ExecQuery"/>
+    <bpmn:sequenceFlow id="SF_D2" sourceRef="Task_ExecQuery"   targetRef="Task_RLSPolicy"/>
+    <bpmn:sequenceFlow id="SF_D3" sourceRef="Task_RLSPolicy"   targetRef="GW_RLSOk"/>
+    <bpmn:sequenceFlow id="SF_D4" name="Blocked" sourceRef="GW_RLSOk" targetRef="End_DB_Blocked"/>
+    <bpmn:sequenceFlow id="SF_D5" name="Pass"    sourceRef="GW_RLSOk" targetRef="Task_ReturnData"/>
+    <bpmn:sequenceFlow id="SF_D6" sourceRef="Task_ReturnData"  targetRef="Task_ClearCtx"/>
+    <bpmn:sequenceFlow id="SF_D7" sourceRef="Task_ClearCtx"    targetRef="End_DB_Done"/>
+    <bpmn:sequenceFlow id="SF_D8" sourceRef="End_DB_Done"      targetRef="Task_ReceiveResp"/>
+    <bpmn:sequenceFlow id="SF_C3" sourceRef="Task_ReceiveResp" targetRef="End_Success"/>
+  </bpmn:process>
+
+  <!-- ═══════════════════════════════ DIAGRAM LAYOUT ════════════════ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_3">
+    <bpmndi:BPMNPlane id="BPMNPlane_3" bpmnElement="Proc_MultiTenant">
+
+      <!-- POOL (single process with lanes) -->
+      <bpmndi:BPMNShape id="S_Pool" bpmnElement="Proc_MultiTenant" isHorizontal="true">
+        <dc:Bounds x="120" y="80" width="1680" height="820"/>
+      </bpmndi:BPMNShape>
+
+      <!-- LANE: Client -->
+      <bpmndi:BPMNShape id="S_Lane_Client"   bpmnElement="Lane_Client"   isHorizontal="true"><dc:Bounds x="150" y="80"  width="1650" height="140"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Request" bpmnElement="Start_Request"> <dc:Bounds x="210" y="131" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_PrepareReq"    bpmnElement="Task_PrepareReq"><dc:Bounds x="296" y="112" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ReceiveResp"   bpmnElement="Task_ReceiveResp"><dc:Bounds x="1460" y="112" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Success"   bpmnElement="End_Success">   <dc:Bounds x="1660" y="131" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Error"     bpmnElement="End_Error">     <dc:Bounds x="1660" y="174" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_C1" bpmnElement="SF_C1"><di:waypoint x="246" y="149"/><di:waypoint x="296" y="149"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_C2" bpmnElement="SF_C2"><di:waypoint x="436" y="149"/><di:waypoint x="436" y="220"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_C3" bpmnElement="SF_C3"><di:waypoint x="1600" y="149"/><di:waypoint x="1660" y="149"/></bpmndi:BPMNEdge>
+
+      <!-- LANE: Filter -->
+      <bpmndi:BPMNShape id="S_Lane_Filter"    bpmnElement="Lane_Filter"   isHorizontal="true"><dc:Bounds x="150" y="220" width="1650" height="160"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ResolveTenant"  bpmnElement="Task_ResolveTenant"><dc:Bounds x="296" y="238" width="190" height="104"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_TenantFound" bpmnElement="GW_TenantFound" isMarkerVisible="true"><dc:Bounds x="536" y="270" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SetTenantCtx"   bpmnElement="Task_SetTenantCtx"><dc:Bounds x="636" y="250" width="170" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_TenantNF"   bpmnElement="End_TenantNotFound"><dc:Bounds x="536" y="350" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_F1" bpmnElement="SF_F1"><di:waypoint x="486" y="290"/><di:waypoint x="536" y="290"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_F2" bpmnElement="SF_F2"><di:waypoint x="561" y="320"/><di:waypoint x="561" y="350"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_F3" bpmnElement="SF_F3"><di:waypoint x="586" y="295"/><di:waypoint x="636" y="287"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_F4" bpmnElement="SF_F4"><di:waypoint x="806" y="287"/><di:waypoint x="870" y="287"/><di:waypoint x="870" y="380"/></bpmndi:BPMNEdge>
+
+      <!-- LANE: Security -->
+      <bpmndi:BPMNShape id="S_Lane_Security"  bpmnElement="Lane_Security"  isHorizontal="true"><dc:Bounds x="150" y="380" width="1650" height="200"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ExtractJWT"     bpmnElement="Task_ExtractJWT">   <dc:Bounds x="796" y="398" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ValidateSig"    bpmnElement="Task_ValidateSig">  <dc:Bounds x="996" y="398" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_JWTValid"    bpmnElement="GW_JWTValid"   isMarkerVisible="true"><dc:Bounds x="1206" y="410" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ExtractClaims"  bpmnElement="Task_ExtractClaims"><dc:Bounds x="1306" y="398" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_PreAuthorize"   bpmnElement="Task_PreAuthorize"> <dc:Bounds x="1306" y="500" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_Authorized"  bpmnElement="GW_Authorized" isMarkerVisible="true"><dc:Bounds x="1506" y="510" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_401"        bpmnElement="End_401">           <dc:Bounds x="1206" y="520" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_403"        bpmnElement="End_403">           <dc:Bounds x="1606" y="520" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_S1" bpmnElement="SF_S1"><di:waypoint x="946" y="435"/><di:waypoint x="996" y="435"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S2" bpmnElement="SF_S2"><di:waypoint x="1156" y="435"/><di:waypoint x="1206" y="435"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S3" bpmnElement="SF_S3"><di:waypoint x="1231" y="460"/><di:waypoint x="1231" y="520"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S4" bpmnElement="SF_S4"><di:waypoint x="1256" y="435"/><di:waypoint x="1306" y="435"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S5" bpmnElement="SF_S5"><di:waypoint x="1381" y="472"/><di:waypoint x="1381" y="500"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S6" bpmnElement="SF_S6"><di:waypoint x="1456" y="537"/><di:waypoint x="1506" y="535"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S7" bpmnElement="SF_S7"><di:waypoint x="1556" y="535"/><di:waypoint x="1606" y="537"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_S8" bpmnElement="SF_S8"><di:waypoint x="1531" y="510"/><di:waypoint x="1531" y="480"/><di:waypoint x="1610" y="480"/><di:waypoint x="1610" y="600"/></bpmndi:BPMNEdge>
+
+      <!-- LANE: Service -->
+      <bpmndi:BPMNShape id="S_Lane_Service"   bpmnElement="Lane_Service"   isHorizontal="true"><dc:Bounds x="150" y="580" width="1650" height="140"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ServiceLogic"   bpmnElement="Task_ServiceLogic"><dc:Bounds x="1540" y="598" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_BuildQuery"     bpmnElement="Task_BuildQuery">  <dc:Bounds x="1380" y="598" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_SV1" bpmnElement="SF_SV1"><di:waypoint x="1540" y="635"/><di:waypoint x="1530" y="635"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_SV2" bpmnElement="SF_SV2"><di:waypoint x="1380" y="635"/><di:waypoint x="1330" y="635"/><di:waypoint x="1330" y="720"/></bpmndi:BPMNEdge>
+
+      <!-- LANE: Database -->
+      <bpmndi:BPMNShape id="S_Lane_DB"        bpmnElement="Lane_DB"        isHorizontal="true"><dc:Bounds x="150" y="720" width="1650" height="180"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SetRLS"         bpmnElement="Task_SetRLS">     <dc:Bounds x="1210" y="738" width="190" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ExecQuery"      bpmnElement="Task_ExecQuery">  <dc:Bounds x="1010" y="738" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_RLSPolicy"      bpmnElement="Task_RLSPolicy">  <dc:Bounds x="810" y="738" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_RLSOk"       bpmnElement="GW_RLSOk" isMarkerVisible="true"><dc:Bounds x="620" y="750" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ReturnData"     bpmnElement="Task_ReturnData"> <dc:Bounds x="450" y="738" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ClearCtx"       bpmnElement="Task_ClearCtx">   <dc:Bounds x="290" y="738" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_DB_Blocked" bpmnElement="End_DB_Blocked">  <dc:Bounds x="620" y="838" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_DB_Done"    bpmnElement="End_DB_Done">     <dc:Bounds x="210" y="757" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_D1" bpmnElement="SF_D1"><di:waypoint x="1330" y="775"/><di:waypoint x="1400" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D1b" bpmnElement="SF_D1"><di:waypoint x="1210" y="775"/><di:waypoint x="1160" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D2" bpmnElement="SF_D2"><di:waypoint x="1010" y="775"/><di:waypoint x="970" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D3" bpmnElement="SF_D3"><di:waypoint x="810" y="775"/><di:waypoint x="670" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D4" bpmnElement="SF_D4"><di:waypoint x="645" y="800"/><di:waypoint x="645" y="838"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D5" bpmnElement="SF_D5"><di:waypoint x="620" y="775"/><di:waypoint x="580" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D6" bpmnElement="SF_D6"><di:waypoint x="450" y="775"/><di:waypoint x="420" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D7" bpmnElement="SF_D7"><di:waypoint x="290" y="775"/><di:waypoint x="246" y="775"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_D8" bpmnElement="SF_D8"><di:waypoint x="228" y="757"/><di:waypoint x="228" y="620"/><di:waypoint x="1460" y="149"/></bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

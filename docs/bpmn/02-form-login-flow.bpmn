@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  id="Definitions_FormLogin"
+  targetNamespace="http://identityplatform.com/bpmn">
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PROCESS: Form Login Flow — Native Mobile App
+       Actors  : User | Mobile App (mobile-client-sample-form)
+                 Auth Server (MobileAuthController) | Redis | PostgreSQL
+       Endpoint: POST /api/auth/token
+       ═══════════════════════════════════════════════════════════════════ -->
+
+  <bpmn:collaboration id="Collab_FormLogin">
+    <bpmn:participant id="Pool_User"     name="User"                          processRef="Proc_User"/>
+    <bpmn:participant id="Pool_App"      name="Mobile App (Form Login)"       processRef="Proc_App"/>
+    <bpmn:participant id="Pool_Auth"     name="Auth Server  :8080"            processRef="Proc_Auth"/>
+    <bpmn:participant id="Pool_Infra"    name="Infrastructure (Redis + PostgreSQL)" processRef="Proc_Infra"/>
+
+    <bpmn:messageFlow id="MF_FormReq"
+      name="POST /api/auth/token&#10;x-www-form-urlencoded&#10;username + password"
+      sourceRef="Task_SubmitForm" targetRef="Start_Auth"/>
+    <bpmn:messageFlow id="MF_TokenResp"
+      name="{access_token, token_type, expires_in}"
+      sourceRef="Task_ReturnToken" targetRef="Task_ReceiveToken"/>
+    <bpmn:messageFlow id="MF_ErrorResp"
+      name="401 {error: invalid_grant}"
+      sourceRef="End_Auth_Err" targetRef="Task_ShowError"/>
+    <bpmn:messageFlow id="MF_429"
+      name="429 Too Many Requests"
+      sourceRef="End_RateLimit" targetRef="Task_ShowRateErr"/>
+    <bpmn:messageFlow id="MF_RedisCheck"
+      name="INCR rl:login:{ip}&#10;EXPIRE 60s"
+      sourceRef="Task_RateCheck"  targetRef="Start_Redis"/>
+    <bpmn:messageFlow id="MF_RedisResp"
+      name="count"
+      sourceRef="End_Redis"       targetRef="Task_RateCheck"/>
+    <bpmn:messageFlow id="MF_DBQuery"
+      name="SELECT user WHERE email=?&#10;AND org.primaryDomain=?"
+      sourceRef="Task_LoadUser"   targetRef="Start_DB"/>
+    <bpmn:messageFlow id="MF_DBResp"
+      name="UserPrincipal (org_id, roles)"
+      sourceRef="End_DB"          targetRef="Task_LoadUser"/>
+  </bpmn:collaboration>
+
+  <!-- ─── USER PROCESS ─────────────────────────────────────────────── -->
+  <bpmn:process id="Proc_User" isExecutable="false">
+    <bpmn:startEvent id="Start_User" name="Mở app"/>
+    <bpmn:userTask   id="Task_OpenForm"   name="Nhìn thấy&#10;Login Form"/>
+    <bpmn:userTask   id="Task_FillForm"   name="Nhập email / password"/>
+    <bpmn:userTask   id="Task_TapSignIn"  name="Bấm 'Sign In'"/>
+    <bpmn:userTask   id="Task_ShowError"  name="Thấy lỗi&#10;(sai credentials)"/>
+    <bpmn:userTask   id="Task_ShowRateErr" name="Thấy lỗi&#10;Too Many Requests"/>
+    <bpmn:userTask   id="Task_Dashboard"  name="Xem Dashboard"/>
+    <bpmn:endEvent   id="End_User_Success" name="Đã đăng nhập"/>
+    <bpmn:endEvent   id="End_User_Retry"   name="Thử lại"/>
+
+    <bpmn:sequenceFlow id="SF_U1" sourceRef="Start_User"   targetRef="Task_OpenForm"/>
+    <bpmn:sequenceFlow id="SF_U2" sourceRef="Task_OpenForm" targetRef="Task_FillForm"/>
+    <bpmn:sequenceFlow id="SF_U3" sourceRef="Task_FillForm" targetRef="Task_TapSignIn"/>
+    <bpmn:sequenceFlow id="SF_U4" sourceRef="Task_ShowError" targetRef="End_User_Retry"/>
+    <bpmn:sequenceFlow id="SF_U5" sourceRef="Task_ShowRateErr" targetRef="End_User_Retry"/>
+    <bpmn:sequenceFlow id="SF_U6" sourceRef="Task_Dashboard" targetRef="End_User_Success"/>
+  </bpmn:process>
+
+  <!-- ─── MOBILE APP PROCESS ──────────────────────────────────────── -->
+  <bpmn:process id="Proc_App" isExecutable="false">
+    <bpmn:startEvent id="Start_App"/>
+    <bpmn:serviceTask id="Task_SubmitForm"   name="fetch POST /api/auth/token&#10;Content-Type: x-www-form-urlencoded&#10;username=...&amp;password=..."/>
+    <bpmn:serviceTask id="Task_ReceiveToken" name="Nhận {access_token}&#10;Lưu vào AsyncStorage"/>
+    <bpmn:serviceTask id="Task_DecodeJWT"    name="Decode JWT claims&#10;org_id, roles, name, email"/>
+    <bpmn:serviceTask id="Task_Navigate"     name="navigation.replace('Dashboard')"/>
+    <bpmn:endEvent    id="End_App_Success"   name="Show Dashboard"/>
+
+    <bpmn:sequenceFlow id="SF_AP1" sourceRef="Start_App"         targetRef="Task_SubmitForm"/>
+    <bpmn:sequenceFlow id="SF_AP2" sourceRef="Task_ReceiveToken"  targetRef="Task_DecodeJWT"/>
+    <bpmn:sequenceFlow id="SF_AP3" sourceRef="Task_DecodeJWT"     targetRef="Task_Navigate"/>
+    <bpmn:sequenceFlow id="SF_AP4" sourceRef="Task_Navigate"      targetRef="End_App_Success"/>
+  </bpmn:process>
+
+  <!-- ─── AUTH SERVER PROCESS ─────────────────────────────────────── -->
+  <bpmn:process id="Proc_Auth" isExecutable="false">
+    <bpmn:startEvent id="Start_Auth" name="POST /api/auth/token"/>
+
+    <bpmn:serviceTask id="Task_RateCheck"    name="LoginRateLimitFilter&#10;INCR Redis rl:login:{ip}"/>
+    <bpmn:exclusiveGateway id="GW_Rate"      name="≤ 10 attempts?"/>
+    <bpmn:serviceTask id="Task_LoadUser"     name="MultiTenantUserDetailsService&#10;Detect tenant từ email domain&#10;→ PostgreSQL query"/>
+    <bpmn:exclusiveGateway id="GW_AuthOK"   name="Password match?"/>
+    <bpmn:serviceTask id="Task_FetchClaims"  name="UserService.findClaimsById()&#10;org_id, roles, permissions"/>
+    <bpmn:serviceTask id="Task_BuildClaims"  name="Build JwtClaimsSet&#10;sub, email, org_id, roles,&#10;permissions, iss, exp"/>
+    <bpmn:serviceTask id="Task_SignJWT"      name="JwtEncoder.encode()&#10;NimbusJwtEncoder&#10;RSA key từ auth_key_pair (V14)"/>
+    <bpmn:serviceTask id="Task_ReturnToken"  name="ResponseEntity 200&#10;{access_token, token_type,&#10;expires_in, scope}"/>
+
+    <bpmn:endEvent id="End_RateLimit"  name="429 Too Many Requests"/>
+    <bpmn:endEvent id="End_Auth_Err"   name="401 invalid_grant"/>
+    <bpmn:endEvent id="End_Auth_OK"    name="200 OK"/>
+
+    <bpmn:sequenceFlow id="SF_AS1" sourceRef="Start_Auth"      targetRef="Task_RateCheck"/>
+    <bpmn:sequenceFlow id="SF_AS2" sourceRef="Task_RateCheck"  targetRef="GW_Rate"/>
+    <bpmn:sequenceFlow id="SF_AS3" name="No (> 10)"  sourceRef="GW_Rate"    targetRef="End_RateLimit"/>
+    <bpmn:sequenceFlow id="SF_AS4" name="Yes"         sourceRef="GW_Rate"    targetRef="Task_LoadUser"/>
+    <bpmn:sequenceFlow id="SF_AS5" sourceRef="Task_LoadUser"   targetRef="GW_AuthOK"/>
+    <bpmn:sequenceFlow id="SF_AS6" name="No"          sourceRef="GW_AuthOK"  targetRef="End_Auth_Err"/>
+    <bpmn:sequenceFlow id="SF_AS7" name="Yes"         sourceRef="GW_AuthOK"  targetRef="Task_FetchClaims"/>
+    <bpmn:sequenceFlow id="SF_AS8" sourceRef="Task_FetchClaims" targetRef="Task_BuildClaims"/>
+    <bpmn:sequenceFlow id="SF_AS9" sourceRef="Task_BuildClaims" targetRef="Task_SignJWT"/>
+    <bpmn:sequenceFlow id="SF_AS10" sourceRef="Task_SignJWT"    targetRef="Task_ReturnToken"/>
+    <bpmn:sequenceFlow id="SF_AS11" sourceRef="Task_ReturnToken" targetRef="End_Auth_OK"/>
+  </bpmn:process>
+
+  <!-- ─── INFRASTRUCTURE (Redis + PostgreSQL) ─────────────────────── -->
+  <bpmn:process id="Proc_Infra" isExecutable="false">
+    <bpmn:startEvent  id="Start_Redis"  name="INCR / EXPIRE"/>
+    <bpmn:serviceTask id="Task_RedisOp" name="Redis: INCR key&#10;EXPIRE 60s nếu count==1&#10;Return count"/>
+    <bpmn:endEvent    id="End_Redis"    name="Return count"/>
+
+    <bpmn:startEvent  id="Start_DB"    name="SELECT user"/>
+    <bpmn:serviceTask id="Task_DBQuery" name="SELECT u.*, r.*, o.*&#10;FROM users u&#10;JOIN organizations o ON u.org_id = o.id&#10;WHERE u.email=? AND o.primary_domain=?&#10;AND u.deleted=false"/>
+    <bpmn:endEvent    id="End_DB"      name="UserPrincipal"/>
+
+    <bpmn:sequenceFlow id="SF_I1" sourceRef="Start_Redis"  targetRef="Task_RedisOp"/>
+    <bpmn:sequenceFlow id="SF_I2" sourceRef="Task_RedisOp" targetRef="End_Redis"/>
+    <bpmn:sequenceFlow id="SF_I3" sourceRef="Start_DB"     targetRef="Task_DBQuery"/>
+    <bpmn:sequenceFlow id="SF_I4" sourceRef="Task_DBQuery" targetRef="End_DB"/>
+  </bpmn:process>
+
+  <!-- ═══════════════════════════════ DIAGRAM LAYOUT ════════════════ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_2">
+    <bpmndi:BPMNPlane id="BPMNPlane_2" bpmnElement="Collab_FormLogin">
+
+      <!-- USER POOL -->
+      <bpmndi:BPMNShape id="S_Pool_User" bpmnElement="Pool_User" isHorizontal="true">
+        <dc:Bounds x="120" y="80" width="1440" height="160"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_User"     bpmnElement="Start_User">       <dc:Bounds x="192" y="143" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_OpenForm"       bpmnElement="Task_OpenForm">    <dc:Bounds x="278" y="124" width="120" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_FillForm"       bpmnElement="Task_FillForm">    <dc:Bounds x="450" y="124" width="120" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_TapSignIn"      bpmnElement="Task_TapSignIn">   <dc:Bounds x="620" y="124" width="120" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ShowError"      bpmnElement="Task_ShowError">   <dc:Bounds x="830" y="124" width="120" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ShowRateErr"    bpmnElement="Task_ShowRateErr"> <dc:Bounds x="1000" y="124" width="120" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Dashboard"      bpmnElement="Task_Dashboard">   <dc:Bounds x="1200" y="124" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Success"    bpmnElement="End_User_Success"> <dc:Bounds x="1390" y="143" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Retry"      bpmnElement="End_User_Retry">   <dc:Bounds x="1000" y="200" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_U1" bpmnElement="SF_U1"><di:waypoint x="228" y="161"/><di:waypoint x="278" y="161"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U2" bpmnElement="SF_U2"><di:waypoint x="398" y="161"/><di:waypoint x="450" y="161"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U3" bpmnElement="SF_U3"><di:waypoint x="570" y="161"/><di:waypoint x="620" y="161"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U4" bpmnElement="SF_U4"><di:waypoint x="890" y="198"/><di:waypoint x="890" y="218"/><di:waypoint x="1000" y="218"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U5" bpmnElement="SF_U5"><di:waypoint x="1060" y="198"/><di:waypoint x="1060" y="218"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U6" bpmnElement="SF_U6"><di:waypoint x="1330" y="161"/><di:waypoint x="1390" y="161"/></bpmndi:BPMNEdge>
+
+      <!-- MOBILE APP POOL -->
+      <bpmndi:BPMNShape id="S_Pool_App" bpmnElement="Pool_App" isHorizontal="true">
+        <dc:Bounds x="120" y="270" width="1440" height="150"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_App"      bpmnElement="Start_App">        <dc:Bounds x="192" y="327" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SubmitForm"     bpmnElement="Task_SubmitForm">  <dc:Bounds x="278" y="308" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ReceiveToken"   bpmnElement="Task_ReceiveToken"><dc:Bounds x="830" y="308" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_DecodeJWT"      bpmnElement="Task_DecodeJWT">   <dc:Bounds x="1020" y="308" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Navigate"       bpmnElement="Task_Navigate">    <dc:Bounds x="1210" y="308" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_App"        bpmnElement="End_App_Success">  <dc:Bounds x="1406" y="327" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_AP2" bpmnElement="SF_AP2"><di:waypoint x="970" y="345"/><di:waypoint x="1020" y="345"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP3" bpmnElement="SF_AP3"><di:waypoint x="1160" y="345"/><di:waypoint x="1210" y="345"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP4" bpmnElement="SF_AP4"><di:waypoint x="1350" y="345"/><di:waypoint x="1406" y="345"/></bpmndi:BPMNEdge>
+
+      <!-- AUTH SERVER POOL -->
+      <bpmndi:BPMNShape id="S_Pool_Auth" bpmnElement="Pool_Auth" isHorizontal="true">
+        <dc:Bounds x="120" y="450" width="1440" height="230"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Auth"     bpmnElement="Start_Auth">       <dc:Bounds x="278" y="507" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_RateCheck"      bpmnElement="Task_RateCheck">   <dc:Bounds x="364" y="488" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_Rate"        bpmnElement="GW_Rate" isMarkerVisible="true"><dc:Bounds x="564" y="500" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_LoadUser"       bpmnElement="Task_LoadUser">    <dc:Bounds x="664" y="488" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_AuthOK"      bpmnElement="GW_AuthOK" isMarkerVisible="true"><dc:Bounds x="864" y="500" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_FetchClaims"    bpmnElement="Task_FetchClaims"> <dc:Bounds x="964" y="488" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_BuildClaims"    bpmnElement="Task_BuildClaims"> <dc:Bounds x="1164" y="488" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SignJWT"        bpmnElement="Task_SignJWT">     <dc:Bounds x="964" y="590" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ReturnToken"    bpmnElement="Task_ReturnToken"> <dc:Bounds x="1164" y="590" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_RateLimit"  bpmnElement="End_RateLimit">    <dc:Bounds x="564" y="600" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Auth_Err"   bpmnElement="End_Auth_Err">     <dc:Bounds x="864" y="600" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Auth_OK"    bpmnElement="End_Auth_OK">      <dc:Bounds x="1390" y="607" width="36" height="36"/></bpmndi:BPMNShape>
+      <!-- auth edges -->
+      <bpmndi:BPMNEdge id="E_AS1" bpmnElement="SF_AS1"> <di:waypoint x="314" y="525"/><di:waypoint x="364" y="525"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS2" bpmnElement="SF_AS2"> <di:waypoint x="514" y="525"/><di:waypoint x="564" y="525"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS3" bpmnElement="SF_AS3"> <di:waypoint x="589" y="550"/><di:waypoint x="589" y="600"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS4" bpmnElement="SF_AS4"> <di:waypoint x="614" y="525"/><di:waypoint x="664" y="525"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS5" bpmnElement="SF_AS5"> <di:waypoint x="814" y="525"/><di:waypoint x="864" y="525"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS6" bpmnElement="SF_AS6"> <di:waypoint x="889" y="550"/><di:waypoint x="889" y="600"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS7" bpmnElement="SF_AS7"> <di:waypoint x="914" y="525"/><di:waypoint x="964" y="525"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS8" bpmnElement="SF_AS8"> <di:waypoint x="1114" y="525"/><di:waypoint x="1164" y="525"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS9" bpmnElement="SF_AS9"> <di:waypoint x="1239" y="562"/><di:waypoint x="1239" y="590"/><di:waypoint x="1114" y="627"/><di:waypoint x="964" y="627"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS10" bpmnElement="SF_AS10"><di:waypoint x="1114" y="627"/><di:waypoint x="1164" y="627"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AS11" bpmnElement="SF_AS11"><di:waypoint x="1314" y="627"/><di:waypoint x="1390" y="625"/></bpmndi:BPMNEdge>
+
+      <!-- INFRASTRUCTURE POOL -->
+      <bpmndi:BPMNShape id="S_Pool_Infra" bpmnElement="Pool_Infra" isHorizontal="true">
+        <dc:Bounds x="120" y="710" width="1440" height="180"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Redis"  bpmnElement="Start_Redis">   <dc:Bounds x="364" y="747" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_RedisOp"      bpmnElement="Task_RedisOp">  <dc:Bounds x="450" y="728" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Redis"    bpmnElement="End_Redis">     <dc:Bounds x="660" y="747" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_DB"     bpmnElement="Start_DB">      <dc:Bounds x="664" y="820" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_DBQuery"      bpmnElement="Task_DBQuery">  <dc:Bounds x="750" y="800" width="200" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_DB"       bpmnElement="End_DB">        <dc:Bounds x="1000" y="820" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_I1" bpmnElement="SF_I1"><di:waypoint x="400" y="765"/><di:waypoint x="450" y="765"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_I2" bpmnElement="SF_I2"><di:waypoint x="610" y="765"/><di:waypoint x="660" y="765"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_I3" bpmnElement="SF_I3"><di:waypoint x="700" y="838"/><di:waypoint x="750" y="838"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_I4" bpmnElement="SF_I4"><di:waypoint x="950" y="838"/><di:waypoint x="1000" y="838"/></bpmndi:BPMNEdge>
+
+      <!-- Message flows -->
+      <bpmndi:BPMNEdge id="E_MF_FormReq"  bpmnElement="MF_FormReq">    <di:waypoint x="358" y="382"/><di:waypoint x="358" y="420"/><di:waypoint x="296" y="420"/><di:waypoint x="296" y="507"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_TokenResp" bpmnElement="MF_TokenResp"> <di:waypoint x="1239" y="590"/><di:waypoint x="1239" y="420"/><di:waypoint x="900" y="420"/><di:waypoint x="900" y="382"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_ErrorResp" bpmnElement="MF_ErrorResp"> <di:waypoint x="882" y="600"/><di:waypoint x="882" y="420"/><di:waypoint x="890" y="161"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_429"       bpmnElement="MF_429">       <di:waypoint x="582" y="600"/><di:waypoint x="582" y="420"/><di:waypoint x="1060" y="420"/><di:waypoint x="1060" y="198"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_RedisCheck" bpmnElement="MF_RedisCheck"><di:waypoint x="439" y="562"/><di:waypoint x="439" y="650"/><di:waypoint x="382" y="650"/><di:waypoint x="382" y="747"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_RedisResp" bpmnElement="MF_RedisResp"> <di:waypoint x="678" y="747"/><di:waypoint x="678" y="650"/><di:waypoint x="540" y="650"/><di:waypoint x="540" y="562"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_DBQuery"   bpmnElement="MF_DBQuery">   <di:waypoint x="739" y="562"/><di:waypoint x="739" y="650"/><di:waypoint x="682" y="650"/><di:waypoint x="682" y="820"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_DBResp"    bpmnElement="MF_DBResp">    <di:waypoint x="1018" y="820"/><di:waypoint x="1018" y="650"/><di:waypoint x="814" y="650"/><di:waypoint x="814" y="562"/></bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

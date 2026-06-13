@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('Organizations')}"></head>
+<body class="d-flex">
+
+<div th:replace="~{fragments/layout :: sidebar}"></div>
+
+<main class="main-content">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h4 class="mb-0 fw-bold">Organizations</h4>
+            <small class="text-muted">Tenant management (PLATFORM_ADMIN only)</small>
+        </div>
+        <button class="btn btn-primary" onclick="openCreateModal()">
+            <i class="bi bi-plus-lg me-1"></i>New Organization
+        </button>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-3">Name</th>
+                        <th>Slug</th>
+                        <th>Domain</th>
+                        <th>Status</th>
+                        <th>MFA</th>
+                        <th>Self Reg.</th>
+                        <th class="pe-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="orgsTable">
+                    <tr><td colspan="7" class="text-center py-4 text-muted">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<!-- Create Modal -->
+<div class="modal fade" id="createModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">New Organization</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body">
+                <div class="mb-3"><label class="form-label small fw-semibold">Name *</label>
+                    <input type="text" id="c-name" class="form-control" placeholder="Acme Corp"></div>
+                <div class="mb-3"><label class="form-label small fw-semibold">Slug * <small class="text-muted">(subdomain, lowercase only)</small></label>
+                    <input type="text" id="c-slug" class="form-control" placeholder="acme-corp"
+                           pattern="^[a-z0-9-]+" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9-]/g,'')"></div>
+                <div class="mb-3"><label class="form-label small fw-semibold">Primary Domain</label>
+                    <input type="text" id="c-domain" class="form-control" placeholder="acme.com"></div>
+                <div class="mb-3"><label class="form-label small fw-semibold">Admin Email</label>
+                    <input type="email" id="c-adminEmail" class="form-control" placeholder="admin@acme.com"></div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="c-mfa">
+                            <label class="form-check-label small" for="c-mfa">Require MFA</label></div>
+                    </div>
+                    <div class="col">
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="c-selfReg">
+                            <label class="form-check-label small" for="c-selfReg">Allow self-registration</label></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="createOrg()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script th:replace="~{fragments/layout :: common-js}"></script>
+<script>
+const STATUS_COLOR = { ACTIVE:'success', SUSPENDED:'warning', PENDING_SETUP:'secondary', DEACTIVATED:'dark' };
+
+async function loadOrgs() {
+    try {
+        const data = await apiFetch('/api/v1/organizations?size=50');
+        renderTable(data.content ?? [data]);
+    } catch (e) { showError('Failed to load organizations: ' + e.message); }
+}
+
+function renderTable(orgs) {
+    const tbody = document.getElementById('orgsTable');
+    if (!orgs.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">No organizations</td></tr>'; return; }
+    tbody.innerHTML = orgs.map(o => `
+        <tr>
+            <td class="ps-3"><strong>${o.name}</strong></td>
+            <td><code>${o.slug}</code></td>
+            <td>${o.primaryDomain ?? '<span class="text-muted">—</span>'}</td>
+            <td><span class="badge bg-${STATUS_COLOR[o.status] ?? 'secondary'}">${o.status}</span></td>
+            <td>${o.mfaRequired ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-x-circle text-muted"></i>'}</td>
+            <td>${o.selfRegistrationAllowed ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-x-circle text-muted"></i>'}</td>
+            <td class="pe-3">
+                ${o.status === 'ACTIVE'
+                    ? `<button class="btn btn-outline-warning btn-action me-1" onclick="suspendOrg('${o.id}')">Suspend</button>`
+                    : o.status !== 'DEACTIVATED'
+                    ? `<button class="btn btn-outline-success btn-action me-1" onclick="activateOrg('${o.id}')">Activate</button>`
+                    : ''}
+            </td>
+        </tr>`).join('');
+}
+
+function openCreateModal() { new bootstrap.Modal(document.getElementById('createModal')).show(); }
+
+async function createOrg() {
+    const name = document.getElementById('c-name').value.trim();
+    const slug = document.getElementById('c-slug').value.trim();
+    if (!name || !slug) { showError('Name and Slug are required'); return; }
+    try {
+        await apiFetch('/api/v1/organizations', { method: 'POST', body: JSON.stringify({
+            name, slug,
+            primaryDomain: document.getElementById('c-domain').value.trim() || null,
+            adminEmail: document.getElementById('c-adminEmail').value.trim() || null,
+            mfaRequired: document.getElementById('c-mfa').checked,
+            selfRegistrationAllowed: document.getElementById('c-selfReg').checked
+        })});
+        bootstrap.Modal.getInstance(document.getElementById('createModal')).hide();
+        showToast('Organization created');
+        loadOrgs();
+    } catch (e) { showError(e.message); }
+}
+
+async function activateOrg(id) {
+    try { await apiFetch(`/api/v1/organizations/${id}/activate`, { method: 'POST' });
+          showToast('Organization activated'); loadOrgs(); }
+    catch (e) { showError(e.message); }
+}
+
+async function suspendOrg(id) {
+    if (!confirm('Suspend this organization? All users will be unable to login.')) return;
+    try { await apiFetch(`/api/v1/organizations/${id}/suspend`, { method: 'POST' });
+          showToast('Organization suspended', 'warning'); loadOrgs(); }
+    catch (e) { showError(e.message); }
+}
+
+loadOrgs();
+</script>
+</body>
+</html>

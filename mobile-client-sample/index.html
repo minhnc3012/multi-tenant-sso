@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Real Estate — Mobile Client (PKCE)</title>
+    <!--
+        MOBILE CLIENT SAMPLE — authorization_code + PKCE, no client_secret
+        ─────────────────────────────────────────────────────────────────────
+        Client type : MOBILE_CLIENT
+        Client ID   : realestate-mobile-client
+        Auth method : NONE  (public client — never store a secret on device)
+        PKCE        : S256  (required by identity platform for this client)
+
+        To run:
+            npx serve . -p 8082
+        Then open: http://localhost:8082
+
+        Redirect URI registered in identity platform:
+            http://localhost:8082/callback.html
+    -->
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .phone {
+            background: white;
+            border-radius: 40px;
+            width: 340px;
+            padding: 48px 32px 40px;
+            box-shadow: 0 24px 60px rgba(0,0,0,0.3);
+        }
+        .notch {
+            width: 80px; height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            margin: 0 auto 40px;
+        }
+        .app-icon { font-size: 52px; text-align: center; margin-bottom: 12px; }
+        h1 { font-size: 22px; color: #1e293b; text-align: center; margin-bottom: 4px; }
+        .subtitle { font-size: 13px; color: #94a3b8; text-align: center; margin-bottom: 36px; }
+
+        .btn {
+            width: 100%;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .btn:hover  { background: #4338ca; }
+        .btn:active { transform: scale(0.98); }
+
+        .badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-top: 16px;
+            font-size: 12px;
+            color: #64748b;
+        }
+        .badge-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            flex-shrink: 0;
+        }
+        .tech-note {
+            margin-top: 24px;
+            font-size: 11px;
+            color: #cbd5e1;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="phone">
+        <div class="notch"></div>
+        <div class="app-icon">🏠</div>
+        <h1>Real Estate</h1>
+        <p class="subtitle">Mobile App — PKCE Demo</p>
+
+        <button class="btn" onclick="startPKCE()">Login with Identity Platform</button>
+
+        <div class="badge">
+            <div class="badge-dot"></div>
+            <span>PKCE · no client_secret · public client</span>
+        </div>
+
+        <p class="tech-note">authorization_code + S256 challenge</p>
+    </div>
+
+    <script>
+    const CONFIG = {
+        authorizationEndpoint: 'http://localhost:8080/oauth2/authorize',
+        clientId:              'realestate-mobile-client',
+        redirectUri:           'http://localhost:8082/callback.html',
+        scopes:                'openid profile email',
+    };
+
+    function base64UrlEncode(buf) {
+        return btoa(String.fromCharCode(...new Uint8Array(buf)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    async function generateCodeVerifier() {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        return base64UrlEncode(bytes);
+    }
+
+    async function generateCodeChallenge(verifier) {
+        const data   = new TextEncoder().encode(verifier);
+        const digest = await crypto.subtle.digest('SHA-256', data);
+        return base64UrlEncode(digest);
+    }
+
+    async function startPKCE() {
+        const verifier  = await generateCodeVerifier();
+        const challenge = await generateCodeChallenge(verifier);
+        const state     = base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)));
+
+        sessionStorage.setItem('pkce_verifier', verifier);
+        sessionStorage.setItem('pkce_state',    state);
+
+        const params = new URLSearchParams({
+            response_type:         'code',
+            client_id:             CONFIG.clientId,
+            redirect_uri:          CONFIG.redirectUri,
+            scope:                 CONFIG.scopes,
+            state,
+            code_challenge:        challenge,
+            code_challenge_method: 'S256',
+        });
+
+        window.location.href = CONFIG.authorizationEndpoint + '?' + params;
+    }
+    </script>
+</body>
+</html>

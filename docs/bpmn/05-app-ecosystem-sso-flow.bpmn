@@ -1,0 +1,447 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  id="Definitions_SSO"
+  targetNamespace="http://identityplatform.com/bpmn">
+
+  <!--
+    PROCESS: App Ecosystem SSO Flow
+    Shows how all 4 client apps interact with the central IDP (Auth Server :8080)
+
+    Flows covered:
+      A) Web App (realestate-app :8081)  — authorization_code + client_secret  → FIRST login (establishes SSO session)
+      B) Mobile PKCE (mobile-client-sample) — authorization_code + PKCE, no secret → SSO: re-uses IDP session, no re-login
+      C) Mobile Form  (mobile-client-sample-form) — POST /api/auth/token (first-party, no browser)
+      D) M2M API      (api-client-sample :8083)   — client_credentials (service-to-service)
+
+    All tokens are JWT signed with same RSA key (kid from auth_key_pair table).
+    Resource servers validate tokens via JWKS endpoint: GET /oauth2/jwks
+  -->
+
+  <bpmn:collaboration id="Collab_SSO">
+
+    <!-- Pools -->
+    <bpmn:participant id="Pool_User"        name="User (Browser + Mobile)"         processRef="Proc_User"/>
+    <bpmn:participant id="Pool_WebApp"      name="realestate-app  :8081  (WEB_CLIENT)"   processRef="Proc_WebApp"/>
+    <bpmn:participant id="Pool_IDP"         name="Auth Server / IDP  :8080"        processRef="Proc_IDP"/>
+    <bpmn:participant id="Pool_MobilePKCE"  name="mobile-client-sample  (PKCE)"    processRef="Proc_MobilePKCE"/>
+    <bpmn:participant id="Pool_MobileForm"  name="mobile-client-sample-form  (Form login)" processRef="Proc_MobileForm"/>
+    <bpmn:participant id="Pool_M2M"         name="api-client-sample  :8083  (M2M)"  processRef="Proc_M2M"/>
+
+    <!-- ── FLOW A: Web App authorization_code ── -->
+    <bpmn:messageFlow id="MFA1" name="GET /  (unauthenticated)"           sourceRef="Task_U_OpenWeb"      targetRef="Task_W_CheckAuth"/>
+    <bpmn:messageFlow id="MFA2" name="302 → /oauth2/authorize?&#10;client_id=realestate-web-client&#10;&amp;response_type=code&amp;state=..."
+                                                                           sourceRef="Task_W_Redirect"     targetRef="Task_I_AuthzRequest"/>
+    <bpmn:messageFlow id="MFA3" name="Show login page"                    sourceRef="Task_I_ShowLogin"     targetRef="Task_U_Login"/>
+    <bpmn:messageFlow id="MFA4" name="POST /login (username+password)"    sourceRef="Task_U_Login"         targetRef="Task_I_Authenticate"/>
+    <bpmn:messageFlow id="MFA5" name="302 → /callback?code=AUTH_CODE&amp;state=..." sourceRef="Task_I_IssueCode_A" targetRef="Task_W_ReceiveCode"/>
+    <bpmn:messageFlow id="MFA6" name="POST /oauth2/token&#10;grant=authorization_code&#10;client_secret (Basic Auth)"
+                                                                           sourceRef="Task_W_ExchangeCode" targetRef="Task_I_ValidateCodeA"/>
+    <bpmn:messageFlow id="MFA7" name="200 {access_token, id_token, refresh_token}" sourceRef="Task_I_IssueTokenA" targetRef="Task_W_StoreToken"/>
+    <bpmn:messageFlow id="MFA8" name="200 Dashboard (with Bearer token)"  sourceRef="Task_W_ServeApp"      targetRef="Task_U_UseWebApp"/>
+
+    <!-- ── FLOW B: Mobile PKCE — SSO (no re-login) ── -->
+    <bpmn:messageFlow id="MFB1" name="Open mobile app"                    sourceRef="Task_U_OpenMobile"    targetRef="Task_P_CheckSession"/>
+    <bpmn:messageFlow id="MFB2" name="GET /oauth2/authorize?&#10;client_id=realestate-mobile-client&#10;&amp;code_challenge=S256&amp;..."
+                                                                           sourceRef="Task_P_AuthzReq"      targetRef="Task_I_AuthzRequest_B"/>
+    <bpmn:messageFlow id="MFB3" name="IDP session cookie valid →&#10;302 → app://callback?code=..."      sourceRef="Task_I_IssueCode_B"   targetRef="Task_P_ReceiveCode"/>
+    <bpmn:messageFlow id="MFB4" name="POST /oauth2/token&#10;grant=authorization_code&#10;+code_verifier (no secret)"
+                                                                           sourceRef="Task_P_ExchangeCode"  targetRef="Task_I_ValidateCodeB"/>
+    <bpmn:messageFlow id="MFB5" name="200 {access_token}"                 sourceRef="Task_I_IssueTokenB"   targetRef="Task_P_StoreToken"/>
+
+    <!-- ── FLOW C: Mobile Form (first-party, no browser) ── -->
+    <bpmn:messageFlow id="MFC1" name="Open form login screen"             sourceRef="Task_U_OpenForm"      targetRef="Task_F_ShowForm"/>
+    <bpmn:messageFlow id="MFC2" name="POST /api/auth/token&#10;username+password (x-www-form-urlencoded)" sourceRef="Task_F_PostCreds"     targetRef="Task_I_FormAuth"/>
+    <bpmn:messageFlow id="MFC3" name="200 {access_token, expires_in}"     sourceRef="Task_I_IssueTokenC"   targetRef="Task_F_StoreToken"/>
+
+    <!-- ── FLOW D: M2M client_credentials ── -->
+    <bpmn:messageFlow id="MFD1" name="POST /oauth2/token&#10;grant=client_credentials&#10;client_secret (Basic Auth)"
+                                                                           sourceRef="Task_M_GetToken"      targetRef="Task_I_ClientCreds"/>
+    <bpmn:messageFlow id="MFD2" name="200 {access_token} (no refresh)"    sourceRef="Task_I_IssueTokenD"   targetRef="Task_M_CacheToken"/>
+
+    <!-- ── FLOW E: All apps call Resource Server API with Bearer token ── -->
+    <bpmn:messageFlow id="MFE1" name="GET /oauth2/jwks  (cache 1h)"       sourceRef="Task_I_ServeJWKS"     targetRef="Task_W_ValidateRS"/>
+    <bpmn:messageFlow id="MFE2" name="GET /oauth2/jwks"                    sourceRef="Task_I_ServeJWKS2"    targetRef="Task_P_ValidateRS"/>
+    <bpmn:messageFlow id="MFE3" name="GET /oauth2/jwks"                    sourceRef="Task_I_ServeJWKS3"    targetRef="Task_M_ValidateRS"/>
+
+  </bpmn:collaboration>
+
+  <!-- ══════════════════════════════════════════════════════════
+       POOL: USER
+       ══════════════════════════════════════════════════════════ -->
+  <bpmn:process id="Proc_User" isExecutable="false">
+    <bpmn:startEvent  id="Start_User"       name="Muốn dùng&#10;ứng dụng"/>
+    <bpmn:userTask    id="Task_U_OpenWeb"   name="Mở realestate-app&#10;http://localhost:8081"/>
+    <bpmn:userTask    id="Task_U_Login"     name="Nhập username + password&#10;tại IDP login page"/>
+    <bpmn:userTask    id="Task_U_UseWebApp" name="Dùng Web App&#10;(đã đăng nhập)"/>
+    <bpmn:userTask    id="Task_U_OpenMobile" name="Mở Mobile App&#10;(PKCE — cùng tài khoản)"/>
+    <bpmn:userTask    id="Task_U_OpenForm"  name="Mở Mobile Form App&#10;(first-party login)"/>
+    <bpmn:endEvent    id="End_User"         name="Dùng được&#10;tất cả apps"/>
+
+    <bpmn:sequenceFlow id="SF_U1" sourceRef="Start_User"        targetRef="Task_U_OpenWeb"/>
+    <bpmn:sequenceFlow id="SF_U2" sourceRef="Task_U_UseWebApp"  targetRef="Task_U_OpenMobile"/>
+    <bpmn:sequenceFlow id="SF_U3" sourceRef="Task_U_OpenMobile" targetRef="Task_U_OpenForm"/>
+    <bpmn:sequenceFlow id="SF_U4" sourceRef="Task_U_OpenForm"   targetRef="End_User"/>
+  </bpmn:process>
+
+  <!-- ══════════════════════════════════════════════════════════
+       POOL: WEB APP (realestate-app :8081)
+       Flow A — authorization_code + client_secret
+       ══════════════════════════════════════════════════════════ -->
+  <bpmn:process id="Proc_WebApp" isExecutable="false">
+    <bpmn:startEvent  id="Start_WebApp"/>
+    <bpmn:serviceTask id="Task_W_CheckAuth"   name="Check session cookie&#10;→ not authenticated"/>
+    <bpmn:serviceTask id="Task_W_Redirect"    name="Build /oauth2/authorize URL&#10;state=random, scope=openid profile&#10;redirect_uri=http://localhost:8081/callback"/>
+    <bpmn:serviceTask id="Task_W_ReceiveCode" name="GET /callback?code=AUTH_CODE&#10;Verify state param"/>
+    <bpmn:serviceTask id="Task_W_ExchangeCode" name="POST /oauth2/token&#10;(server-side, secret not exposed)&#10;code + redirect_uri + client_secret"/>
+    <bpmn:serviceTask id="Task_W_StoreToken"  name="Store access_token in session&#10;Store refresh_token (httpOnly cookie)&#10;Parse id_token claims"/>
+    <bpmn:serviceTask id="Task_W_ServeApp"    name="Render dashboard&#10;Attach Authorization: Bearer {token}&#10;to all API calls"/>
+    <bpmn:serviceTask id="Task_W_ValidateRS"  name="Fetch JWKS from IDP&#10;(cache public key)&#10;Validate incoming Bearer tokens"/>
+    <bpmn:endEvent    id="End_WebApp"/>
+
+    <bpmn:sequenceFlow id="SF_W1" sourceRef="Start_WebApp"       targetRef="Task_W_CheckAuth"/>
+    <bpmn:sequenceFlow id="SF_W2" sourceRef="Task_W_CheckAuth"   targetRef="Task_W_Redirect"/>
+    <bpmn:sequenceFlow id="SF_W3" sourceRef="Task_W_ReceiveCode" targetRef="Task_W_ExchangeCode"/>
+    <bpmn:sequenceFlow id="SF_W4" sourceRef="Task_W_ExchangeCode" targetRef="Task_W_StoreToken"/>
+    <bpmn:sequenceFlow id="SF_W5" sourceRef="Task_W_StoreToken"  targetRef="Task_W_ServeApp"/>
+    <bpmn:sequenceFlow id="SF_W6" sourceRef="Task_W_ServeApp"    targetRef="Task_W_ValidateRS"/>
+    <bpmn:sequenceFlow id="SF_W7" sourceRef="Task_W_ValidateRS"  targetRef="End_WebApp"/>
+  </bpmn:process>
+
+  <!-- ══════════════════════════════════════════════════════════
+       POOL: AUTH SERVER / IDP :8080
+       Central — handles all flows
+       ══════════════════════════════════════════════════════════ -->
+  <bpmn:process id="Proc_IDP" isExecutable="false">
+
+    <!-- FLOW A: Web app authorization_code -->
+    <bpmn:startEvent  id="Start_IDP_A"        name="[A] authz request"/>
+    <bpmn:serviceTask id="Task_I_AuthzRequest" name="OrgClientAuthorizationFilter&#10;Verify: client_id orgId match&#10;Check redirect_uri whitelist"/>
+    <bpmn:serviceTask id="Task_I_ShowLogin"    name="Show /login page&#10;(Spring Security form login)"/>
+    <bpmn:serviceTask id="Task_I_Authenticate" name="MultiTenantUserDetailsService&#10;Load user by email + org_id&#10;BCrypt password verify"/>
+    <bpmn:serviceTask id="Task_I_SetSession"   name="Set IDP session cookie&#10;(JSESSIONID — SSO session start)"/>
+    <bpmn:serviceTask id="Task_I_IssueCode_A"  name="Generate authorization_code&#10;Store in oauth2_authorization table&#10;TTL = 5 min"/>
+    <bpmn:serviceTask id="Task_I_ValidateCodeA" name="Validate code + redirect_uri&#10;Verify client_secret (Basic Auth)&#10;Delete used code (one-time)"/>
+    <bpmn:serviceTask id="Task_I_IssueTokenA"  name="MultiTenantTokenCustomizer&#10;Add: org_id, roles, permissions&#10;Sign JWT with RSA key (auth_key_pair)&#10;Issue access_token + id_token + refresh_token"/>
+
+    <!-- FLOW B: Mobile PKCE — SSO (no re-login) -->
+    <bpmn:startEvent  id="Start_IDP_B"         name="[B] PKCE authz request"/>
+    <bpmn:serviceTask id="Task_I_AuthzRequest_B" name="Check: code_challenge present&#10;Verify client_id (public, no secret)&#10;IDP session cookie? → YES (SSO!)"/>
+    <bpmn:serviceTask id="Task_I_IssueCode_B"   name="Skip login — session valid&#10;Generate authorization_code&#10;Store code_challenge (S256)"/>
+    <bpmn:serviceTask id="Task_I_ValidateCodeB" name="Verify code_verifier SHA256&#10;= stored code_challenge&#10;No client_secret needed"/>
+    <bpmn:serviceTask id="Task_I_IssueTokenB"   name="Issue access_token&#10;Same RSA key, same claims&#10;No refresh_token for public clients"/>
+
+    <!-- FLOW C: Form login (MobileAuthController) -->
+    <bpmn:startEvent  id="Start_IDP_C"        name="[C] POST /api/auth/token"/>
+    <bpmn:serviceTask id="Task_I_RateLimit"    name="LoginRateLimitFilter&#10;Redis INCR rl:login:{ip}&#10;10 attempts / 60s"/>
+    <bpmn:serviceTask id="Task_I_FormAuth"     name="MobileAuthController&#10;AuthenticationManager.authenticate()&#10;→ MultiTenantUserDetailsService"/>
+    <bpmn:serviceTask id="Task_I_IssueTokenC"  name="JwtEncoder.encode()&#10;Same RSA key&#10;NOTE: not in oauth2_authorization table"/>
+
+    <!-- FLOW D: M2M client_credentials -->
+    <bpmn:startEvent  id="Start_IDP_D"        name="[D] client_credentials"/>
+    <bpmn:serviceTask id="Task_I_ClientCreds"  name="Verify client_secret (Basic Auth)&#10;Grant type: client_credentials&#10;No user context"/>
+    <bpmn:serviceTask id="Task_I_IssueTokenD"  name="Issue access_token&#10;scope: api:read api:write&#10;No refresh_token"/>
+
+    <!-- SHARED: JWKS endpoint (all resource servers fetch this) -->
+    <bpmn:serviceTask id="Task_I_ServeJWKS"    name="GET /oauth2/jwks&#10;Return public key (RSA)&#10;from auth_key_pair table"/>
+    <bpmn:serviceTask id="Task_I_ServeJWKS2"   name="GET /oauth2/jwks (PKCE RS)"/>
+    <bpmn:serviceTask id="Task_I_ServeJWKS3"   name="GET /oauth2/jwks (M2M RS)"/>
+
+    <bpmn:endEvent id="End_IDP_A"/>
+    <bpmn:endEvent id="End_IDP_B"/>
+    <bpmn:endEvent id="End_IDP_C"/>
+    <bpmn:endEvent id="End_IDP_D"/>
+
+    <!-- Flow A -->
+    <bpmn:sequenceFlow id="SF_IA1"  sourceRef="Start_IDP_A"         targetRef="Task_I_AuthzRequest"/>
+    <bpmn:sequenceFlow id="SF_IA2"  sourceRef="Task_I_AuthzRequest"  targetRef="Task_I_ShowLogin"/>
+    <bpmn:sequenceFlow id="SF_IA3"  sourceRef="Task_I_Authenticate"  targetRef="Task_I_SetSession"/>
+    <bpmn:sequenceFlow id="SF_IA4"  sourceRef="Task_I_SetSession"    targetRef="Task_I_IssueCode_A"/>
+    <bpmn:sequenceFlow id="SF_IA5"  sourceRef="Task_I_ValidateCodeA" targetRef="Task_I_IssueTokenA"/>
+    <bpmn:sequenceFlow id="SF_IA6"  sourceRef="Task_I_IssueTokenA"   targetRef="End_IDP_A"/>
+    <!-- Flow B -->
+    <bpmn:sequenceFlow id="SF_IB1"  sourceRef="Start_IDP_B"          targetRef="Task_I_AuthzRequest_B"/>
+    <bpmn:sequenceFlow id="SF_IB2"  sourceRef="Task_I_AuthzRequest_B" targetRef="Task_I_IssueCode_B"/>
+    <bpmn:sequenceFlow id="SF_IB3"  sourceRef="Task_I_ValidateCodeB"  targetRef="Task_I_IssueTokenB"/>
+    <bpmn:sequenceFlow id="SF_IB4"  sourceRef="Task_I_IssueTokenB"    targetRef="End_IDP_B"/>
+    <!-- Flow C -->
+    <bpmn:sequenceFlow id="SF_IC1"  sourceRef="Start_IDP_C"          targetRef="Task_I_RateLimit"/>
+    <bpmn:sequenceFlow id="SF_IC2"  sourceRef="Task_I_RateLimit"      targetRef="Task_I_FormAuth"/>
+    <bpmn:sequenceFlow id="SF_IC3"  sourceRef="Task_I_FormAuth"       targetRef="Task_I_IssueTokenC"/>
+    <bpmn:sequenceFlow id="SF_IC4"  sourceRef="Task_I_IssueTokenC"    targetRef="End_IDP_C"/>
+    <!-- Flow D -->
+    <bpmn:sequenceFlow id="SF_ID1"  sourceRef="Start_IDP_D"          targetRef="Task_I_ClientCreds"/>
+    <bpmn:sequenceFlow id="SF_ID2"  sourceRef="Task_I_ClientCreds"    targetRef="Task_I_IssueTokenD"/>
+    <bpmn:sequenceFlow id="SF_ID3"  sourceRef="Task_I_IssueTokenD"    targetRef="End_IDP_D"/>
+  </bpmn:process>
+
+  <!-- ══════════════════════════════════════════════════════════
+       POOL: MOBILE PKCE (mobile-client-sample)
+       Flow B — authorization_code + PKCE, no secret
+       ══════════════════════════════════════════════════════════ -->
+  <bpmn:process id="Proc_MobilePKCE" isExecutable="false">
+    <bpmn:startEvent  id="Start_PKCE"/>
+    <bpmn:serviceTask id="Task_P_CheckSession" name="Check stored access_token&#10;→ not found / expired"/>
+    <bpmn:serviceTask id="Task_P_GenPKCE"      name="Generate code_verifier (random 43-128 chars)&#10;code_challenge = BASE64URL(SHA256(verifier))"/>
+    <bpmn:serviceTask id="Task_P_AuthzReq"     name="expo-auth-session&#10;Open browser to /oauth2/authorize&#10;client_id=realestate-mobile-client&#10;code_challenge_method=S256"/>
+    <bpmn:serviceTask id="Task_P_ReceiveCode"  name="Browser redirects to&#10;app://callback?code=...&#10;Expo deep link → app receives code"/>
+    <bpmn:serviceTask id="Task_P_ExchangeCode" name="POST /oauth2/token&#10;code + code_verifier&#10;NO client_secret (public client)"/>
+    <bpmn:serviceTask id="Task_P_StoreToken"   name="SecureStore.setItemAsync()&#10;Store access_token + expiry&#10;(Expo Secure Storage)"/>
+    <bpmn:serviceTask id="Task_P_CallAPI"      name="GET /api/v1/properties&#10;Authorization: Bearer {token}&#10;X-Organization-Slug: realestate-corp"/>
+    <bpmn:serviceTask id="Task_P_ValidateRS"   name="Resource Server&#10;Fetch JWKS, validate JWT&#10;Check org_id claim"/>
+    <bpmn:endEvent    id="End_PKCE"/>
+
+    <bpmn:sequenceFlow id="SF_P1" sourceRef="Start_PKCE"           targetRef="Task_P_CheckSession"/>
+    <bpmn:sequenceFlow id="SF_P2" sourceRef="Task_P_CheckSession"  targetRef="Task_P_GenPKCE"/>
+    <bpmn:sequenceFlow id="SF_P3" sourceRef="Task_P_GenPKCE"       targetRef="Task_P_AuthzReq"/>
+    <bpmn:sequenceFlow id="SF_P4" sourceRef="Task_P_ReceiveCode"   targetRef="Task_P_ExchangeCode"/>
+    <bpmn:sequenceFlow id="SF_P5" sourceRef="Task_P_ExchangeCode"  targetRef="Task_P_StoreToken"/>
+    <bpmn:sequenceFlow id="SF_P6" sourceRef="Task_P_StoreToken"    targetRef="Task_P_CallAPI"/>
+    <bpmn:sequenceFlow id="SF_P7" sourceRef="Task_P_CallAPI"       targetRef="Task_P_ValidateRS"/>
+    <bpmn:sequenceFlow id="SF_P8" sourceRef="Task_P_ValidateRS"    targetRef="End_PKCE"/>
+  </bpmn:process>
+
+  <!-- ══════════════════════════════════════════════════════════
+       POOL: MOBILE FORM (mobile-client-sample-form)
+       Flow C — POST /api/auth/token (first-party)
+       ══════════════════════════════════════════════════════════ -->
+  <bpmn:process id="Proc_MobileForm" isExecutable="false">
+    <bpmn:startEvent  id="Start_Form"/>
+    <bpmn:serviceTask id="Task_F_ShowForm"   name="Render native form&#10;(no browser, no redirect)&#10;TextInput: email + password"/>
+    <bpmn:serviceTask id="Task_F_PostCreds"  name="POST /api/auth/token&#10;Content-Type: application/x-www-form-urlencoded&#10;X-Organization-Slug: realestate-corp"/>
+    <bpmn:serviceTask id="Task_F_StoreToken" name="AsyncStorage / SecureStore&#10;Store access_token&#10;(⚠ no refresh_token — re-login on expiry)"/>
+    <bpmn:serviceTask id="Task_F_CallAPI"    name="Call API with Bearer token&#10;Same JWT claims as PKCE flow"/>
+    <bpmn:endEvent    id="End_Form"/>
+
+    <bpmn:sequenceFlow id="SF_F1" sourceRef="Start_Form"         targetRef="Task_F_ShowForm"/>
+    <bpmn:sequenceFlow id="SF_F2" sourceRef="Task_F_ShowForm"    targetRef="Task_F_PostCreds"/>
+    <bpmn:sequenceFlow id="SF_F3" sourceRef="Task_F_StoreToken"  targetRef="Task_F_CallAPI"/>
+    <bpmn:sequenceFlow id="SF_F4" sourceRef="Task_F_CallAPI"     targetRef="End_Form"/>
+  </bpmn:process>
+
+  <!-- ══════════════════════════════════════════════════════════
+       POOL: M2M API CLIENT (api-client-sample :8083)
+       Flow D — client_credentials (no user)
+       ══════════════════════════════════════════════════════════ -->
+  <bpmn:process id="Proc_M2M" isExecutable="false">
+    <bpmn:startEvent  id="Start_M2M"/>
+    <bpmn:serviceTask id="Task_M_CheckCache"  name="Check token cache&#10;→ expired / not found"/>
+    <bpmn:serviceTask id="Task_M_GetToken"    name="POST /oauth2/token&#10;grant_type=client_credentials&#10;Authorization: Basic {clientId:secret}&#10;scope=api:read api:write"/>
+    <bpmn:serviceTask id="Task_M_CacheToken"  name="Cache token in memory&#10;expires_in - 60s buffer"/>
+    <bpmn:serviceTask id="Task_M_CallAPI"     name="GET /api/v1/data (internal)&#10;Authorization: Bearer {token}&#10;No X-Organization-Slug needed&#10;(org embedded in token claims)"/>
+    <bpmn:serviceTask id="Task_M_ValidateRS"  name="Resource Server&#10;Validate JWT: iss, exp, scope&#10;No org_id check (service account)"/>
+    <bpmn:endEvent    id="End_M2M"/>
+
+    <bpmn:sequenceFlow id="SF_M1" sourceRef="Start_M2M"          targetRef="Task_M_CheckCache"/>
+    <bpmn:sequenceFlow id="SF_M2" sourceRef="Task_M_CheckCache"   targetRef="Task_M_GetToken"/>
+    <bpmn:sequenceFlow id="SF_M3" sourceRef="Task_M_CacheToken"   targetRef="Task_M_CallAPI"/>
+    <bpmn:sequenceFlow id="SF_M4" sourceRef="Task_M_CallAPI"      targetRef="Task_M_ValidateRS"/>
+    <bpmn:sequenceFlow id="SF_M5" sourceRef="Task_M_ValidateRS"   targetRef="End_M2M"/>
+  </bpmn:process>
+
+  <!-- ═══════════════════════════════ DIAGRAM LAYOUT ════════════════ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_5">
+    <bpmndi:BPMNPlane id="BPMNPlane_5" bpmnElement="Collab_SSO">
+
+      <!-- USER POOL  y=60 h=130 -->
+      <bpmndi:BPMNShape id="S_Pool_User" bpmnElement="Pool_User" isHorizontal="true">
+        <dc:Bounds x="100" y="60" width="1760" height="130"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_User"       bpmnElement="Start_User">        <dc:Bounds x="162" y="109" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_U_OpenWeb"         bpmnElement="Task_U_OpenWeb">    <dc:Bounds x="238" y="90"  width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_U_Login"           bpmnElement="Task_U_Login">      <dc:Bounds x="498" y="90"  width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_U_UseWebApp"       bpmnElement="Task_U_UseWebApp">  <dc:Bounds x="758" y="90"  width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_U_OpenMobile"      bpmnElement="Task_U_OpenMobile"> <dc:Bounds x="988" y="90"  width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_U_OpenForm"        bpmnElement="Task_U_OpenForm">   <dc:Bounds x="1218" y="90" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_User"          bpmnElement="End_User">          <dc:Bounds x="1758" y="109" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_U1" bpmnElement="SF_U1"><di:waypoint x="198" y="127"/><di:waypoint x="238" y="127"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U2" bpmnElement="SF_U2"><di:waypoint x="898" y="127"/><di:waypoint x="988" y="127"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U3" bpmnElement="SF_U3"><di:waypoint x="1128" y="127"/><di:waypoint x="1218" y="127"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_U4" bpmnElement="SF_U4"><di:waypoint x="1358" y="127"/><di:waypoint x="1758" y="127"/></bpmndi:BPMNEdge>
+
+      <!-- WEB APP POOL  y=220 h=200 -->
+      <bpmndi:BPMNShape id="S_Pool_WebApp" bpmnElement="Pool_WebApp" isHorizontal="true">
+        <dc:Bounds x="100" y="220" width="1760" height="200"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_WA"         bpmnElement="Start_WebApp">       <dc:Bounds x="162" y="305" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_CheckAuth"       bpmnElement="Task_W_CheckAuth">   <dc:Bounds x="238" y="280" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_Redirect"        bpmnElement="Task_W_Redirect">    <dc:Bounds x="418" y="280" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_ReceiveCode"     bpmnElement="Task_W_ReceiveCode"> <dc:Bounds x="608" y="280" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_ExchangeCode"    bpmnElement="Task_W_ExchangeCode"><dc:Bounds x="788" y="280" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_StoreToken"      bpmnElement="Task_W_StoreToken">  <dc:Bounds x="988" y="280" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_ServeApp"        bpmnElement="Task_W_ServeApp">    <dc:Bounds x="1188" y="280" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_W_ValidateRS"      bpmnElement="Task_W_ValidateRS">  <dc:Bounds x="1388" y="280" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_WA"            bpmnElement="End_WebApp">         <dc:Bounds x="1588" y="305" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_W1" bpmnElement="SF_W1"><di:waypoint x="198" y="323"/><di:waypoint x="238" y="323"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_W2" bpmnElement="SF_W2"><di:waypoint x="378" y="317"/><di:waypoint x="418" y="317"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_W3" bpmnElement="SF_W3"><di:waypoint x="748" y="317"/><di:waypoint x="788" y="317"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_W4" bpmnElement="SF_W4"><di:waypoint x="938" y="317"/><di:waypoint x="988" y="317"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_W5" bpmnElement="SF_W5"><di:waypoint x="1138" y="317"/><di:waypoint x="1188" y="317"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_W6" bpmnElement="SF_W6"><di:waypoint x="1338" y="317"/><di:waypoint x="1388" y="317"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_W7" bpmnElement="SF_W7"><di:waypoint x="1538" y="317"/><di:waypoint x="1588" y="323"/></bpmndi:BPMNEdge>
+
+      <!-- IDP POOL  y=450 h=360 -->
+      <bpmndi:BPMNShape id="S_Pool_IDP" bpmnElement="Pool_IDP" isHorizontal="true">
+        <dc:Bounds x="100" y="450" width="1760" height="360"/>
+      </bpmndi:BPMNShape>
+      <!-- Flow A lane -->
+      <bpmndi:BPMNShape id="S_Start_IDP_A"      bpmnElement="Start_IDP_A">        <dc:Bounds x="162" y="497" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_AuthzReq"        bpmnElement="Task_I_AuthzRequest"> <dc:Bounds x="218" y="478" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_ShowLogin"       bpmnElement="Task_I_ShowLogin">    <dc:Bounds x="408" y="478" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_Authenticate"    bpmnElement="Task_I_Authenticate"> <dc:Bounds x="588" y="478" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_SetSession"      bpmnElement="Task_I_SetSession">   <dc:Bounds x="778" y="478" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_IssueCode_A"     bpmnElement="Task_I_IssueCode_A">  <dc:Bounds x="968" y="478" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_ValidateCodeA"   bpmnElement="Task_I_ValidateCodeA"><dc:Bounds x="1158" y="478" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_IssueTokenA"     bpmnElement="Task_I_IssueTokenA">  <dc:Bounds x="1348" y="478" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_IDP_A"         bpmnElement="End_IDP_A">           <dc:Bounds x="1558" y="497" width="36"  height="36"/></bpmndi:BPMNShape>
+      <!-- Flow B lane -->
+      <bpmndi:BPMNShape id="S_Start_IDP_B"       bpmnElement="Start_IDP_B">         <dc:Bounds x="162" y="597" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_AuthzReq_B"      bpmnElement="Task_I_AuthzRequest_B"><dc:Bounds x="218" y="578" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_IssueCode_B"     bpmnElement="Task_I_IssueCode_B">   <dc:Bounds x="408" y="578" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_ValidateCodeB"   bpmnElement="Task_I_ValidateCodeB"> <dc:Bounds x="608" y="578" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_IssueTokenB"     bpmnElement="Task_I_IssueTokenB">   <dc:Bounds x="798" y="578" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_IDP_B"         bpmnElement="End_IDP_B">            <dc:Bounds x="998" y="597" width="36"  height="36"/></bpmndi:BPMNShape>
+      <!-- Flow C lane -->
+      <bpmndi:BPMNShape id="S_Start_IDP_C"       bpmnElement="Start_IDP_C">          <dc:Bounds x="162" y="697" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_RateLimit"        bpmnElement="Task_I_RateLimit">     <dc:Bounds x="218" y="678" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_FormAuth"         bpmnElement="Task_I_FormAuth">      <dc:Bounds x="408" y="678" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_IssueTokenC"      bpmnElement="Task_I_IssueTokenC">   <dc:Bounds x="608" y="678" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_IDP_C"          bpmnElement="End_IDP_C">            <dc:Bounds x="808" y="697" width="36"  height="36"/></bpmndi:BPMNShape>
+      <!-- Flow D lane -->
+      <bpmndi:BPMNShape id="S_Start_IDP_D"        bpmnElement="Start_IDP_D">          <dc:Bounds x="162" y="777" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_ClientCreds"       bpmnElement="Task_I_ClientCreds">   <dc:Bounds x="218" y="758" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_IssueTokenD"       bpmnElement="Task_I_IssueTokenD">   <dc:Bounds x="418" y="758" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_IDP_D"           bpmnElement="End_IDP_D">            <dc:Bounds x="618" y="777" width="36"  height="36"/></bpmndi:BPMNShape>
+      <!-- JWKS shared -->
+      <bpmndi:BPMNShape id="S_I_ServeJWKS"         bpmnElement="Task_I_ServeJWKS">    <dc:Bounds x="1558" y="478" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_ServeJWKS2"        bpmnElement="Task_I_ServeJWKS2">   <dc:Bounds x="1558" y="578" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_I_ServeJWKS3"        bpmnElement="Task_I_ServeJWKS3">   <dc:Bounds x="1558" y="678" width="150" height="74"/></bpmndi:BPMNShape>
+      <!-- IDP internal edges Flow A -->
+      <bpmndi:BPMNEdge id="E_IA1" bpmnElement="SF_IA1"><di:waypoint x="198" y="515"/><di:waypoint x="218" y="515"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IA2" bpmnElement="SF_IA2"><di:waypoint x="378" y="515"/><di:waypoint x="408" y="515"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IA3" bpmnElement="SF_IA3"><di:waypoint x="738" y="515"/><di:waypoint x="778" y="515"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IA4" bpmnElement="SF_IA4"><di:waypoint x="928" y="515"/><di:waypoint x="968" y="515"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IA5" bpmnElement="SF_IA5"><di:waypoint x="1308" y="515"/><di:waypoint x="1348" y="515"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IA6" bpmnElement="SF_IA6"><di:waypoint x="1508" y="515"/><di:waypoint x="1558" y="515"/></bpmndi:BPMNEdge>
+      <!-- IDP internal edges Flow B -->
+      <bpmndi:BPMNEdge id="E_IB1" bpmnElement="SF_IB1"><di:waypoint x="198" y="615"/><di:waypoint x="218" y="615"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IB2" bpmnElement="SF_IB2"><di:waypoint x="378" y="615"/><di:waypoint x="408" y="615"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IB3" bpmnElement="SF_IB3"><di:waypoint x="758" y="615"/><di:waypoint x="798" y="615"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IB4" bpmnElement="SF_IB4"><di:waypoint x="948" y="615"/><di:waypoint x="998" y="615"/></bpmndi:BPMNEdge>
+      <!-- IDP internal edges Flow C -->
+      <bpmndi:BPMNEdge id="E_IC1" bpmnElement="SF_IC1"><di:waypoint x="198" y="715"/><di:waypoint x="218" y="715"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IC2" bpmnElement="SF_IC2"><di:waypoint x="368" y="715"/><di:waypoint x="408" y="715"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IC3" bpmnElement="SF_IC3"><di:waypoint x="568" y="715"/><di:waypoint x="608" y="715"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_IC4" bpmnElement="SF_IC4"><di:waypoint x="758" y="715"/><di:waypoint x="808" y="715"/></bpmndi:BPMNEdge>
+      <!-- IDP internal edges Flow D -->
+      <bpmndi:BPMNEdge id="E_ID1" bpmnElement="SF_ID1"><di:waypoint x="198" y="795"/><di:waypoint x="218" y="795"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_ID2" bpmnElement="SF_ID2"><di:waypoint x="378" y="795"/><di:waypoint x="418" y="795"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_ID3" bpmnElement="SF_ID3"><di:waypoint x="568" y="795"/><di:waypoint x="618" y="795"/></bpmndi:BPMNEdge>
+
+      <!-- MOBILE PKCE POOL  y=850 h=200 -->
+      <bpmndi:BPMNShape id="S_Pool_PKCE" bpmnElement="Pool_MobilePKCE" isHorizontal="true">
+        <dc:Bounds x="100" y="850" width="1760" height="200"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_PKCE"      bpmnElement="Start_PKCE">          <dc:Bounds x="162" y="935" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_CheckSession"  bpmnElement="Task_P_CheckSession"> <dc:Bounds x="218" y="916" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_GenPKCE"       bpmnElement="Task_P_GenPKCE">      <dc:Bounds x="408" y="916" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_AuthzReq"      bpmnElement="Task_P_AuthzReq">     <dc:Bounds x="608" y="916" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_ReceiveCode"   bpmnElement="Task_P_ReceiveCode">  <dc:Bounds x="798" y="916" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_ExchangeCode"  bpmnElement="Task_P_ExchangeCode"> <dc:Bounds x="988" y="916" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_StoreToken"    bpmnElement="Task_P_StoreToken">   <dc:Bounds x="1188" y="916" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_CallAPI"       bpmnElement="Task_P_CallAPI">      <dc:Bounds x="1388" y="916" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_P_ValidateRS"    bpmnElement="Task_P_ValidateRS">   <dc:Bounds x="1568" y="916" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_PKCE"        bpmnElement="End_PKCE">            <dc:Bounds x="1748" y="935" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_P1" bpmnElement="SF_P1"><di:waypoint x="198" y="953"/><di:waypoint x="218" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P2" bpmnElement="SF_P2"><di:waypoint x="368" y="953"/><di:waypoint x="408" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P3" bpmnElement="SF_P3"><di:waypoint x="568" y="953"/><di:waypoint x="608" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P4" bpmnElement="SF_P4"><di:waypoint x="948" y="953"/><di:waypoint x="988" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P5" bpmnElement="SF_P5"><di:waypoint x="1148" y="953"/><di:waypoint x="1188" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P6" bpmnElement="SF_P6"><di:waypoint x="1338" y="953"/><di:waypoint x="1388" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P7" bpmnElement="SF_P7"><di:waypoint x="1538" y="953"/><di:waypoint x="1568" y="953"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_P8" bpmnElement="SF_P8"><di:waypoint x="1718" y="953"/><di:waypoint x="1748" y="953"/></bpmndi:BPMNEdge>
+
+      <!-- MOBILE FORM POOL  y=1080 h=170 -->
+      <bpmndi:BPMNShape id="S_Pool_Form" bpmnElement="Pool_MobileForm" isHorizontal="true">
+        <dc:Bounds x="100" y="1080" width="1760" height="170"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Form"     bpmnElement="Start_Form">         <dc:Bounds x="162" y="1150" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_F_ShowForm"     bpmnElement="Task_F_ShowForm">    <dc:Bounds x="218" y="1131" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_F_PostCreds"    bpmnElement="Task_F_PostCreds">   <dc:Bounds x="408" y="1131" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_F_StoreToken"   bpmnElement="Task_F_StoreToken">  <dc:Bounds x="618" y="1131" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_F_CallAPI"      bpmnElement="Task_F_CallAPI">     <dc:Bounds x="808" y="1131" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Form"       bpmnElement="End_Form">           <dc:Bounds x="1008" y="1150" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_F1" bpmnElement="SF_F1"><di:waypoint x="198" y="1168"/><di:waypoint x="218" y="1168"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_F2" bpmnElement="SF_F2"><di:waypoint x="368" y="1168"/><di:waypoint x="408" y="1168"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_F3" bpmnElement="SF_F3"><di:waypoint x="768" y="1168"/><di:waypoint x="808" y="1168"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_F4" bpmnElement="SF_F4"><di:waypoint x="958" y="1168"/><di:waypoint x="1008" y="1168"/></bpmndi:BPMNEdge>
+
+      <!-- M2M POOL  y=1280 h=170 -->
+      <bpmndi:BPMNShape id="S_Pool_M2M" bpmnElement="Pool_M2M" isHorizontal="true">
+        <dc:Bounds x="100" y="1280" width="1760" height="170"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_M2M"     bpmnElement="Start_M2M">          <dc:Bounds x="162" y="1350" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_M_CheckCache"  bpmnElement="Task_M_CheckCache">  <dc:Bounds x="218" y="1331" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_M_GetToken"    bpmnElement="Task_M_GetToken">    <dc:Bounds x="408" y="1331" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_M_CacheToken"  bpmnElement="Task_M_CacheToken">  <dc:Bounds x="618" y="1331" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_M_CallAPI"     bpmnElement="Task_M_CallAPI">     <dc:Bounds x="808" y="1331" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_M_ValidateRS"  bpmnElement="Task_M_ValidateRS">  <dc:Bounds x="998" y="1331" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_M2M"       bpmnElement="End_M2M">            <dc:Bounds x="1198" y="1350" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_M1" bpmnElement="SF_M1"><di:waypoint x="198" y="1368"/><di:waypoint x="218" y="1368"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_M2" bpmnElement="SF_M2"><di:waypoint x="368" y="1368"/><di:waypoint x="408" y="1368"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_M3" bpmnElement="SF_M3"><di:waypoint x="768" y="1368"/><di:waypoint x="808" y="1368"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_M4" bpmnElement="SF_M4"><di:waypoint x="958" y="1368"/><di:waypoint x="998" y="1368"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_M5" bpmnElement="SF_M5"><di:waypoint x="1148" y="1368"/><di:waypoint x="1198" y="1368"/></bpmndi:BPMNEdge>
+
+      <!-- ── Message Flows ── -->
+      <!-- A: User opens web -->
+      <bpmndi:BPMNEdge id="E_MFA1" bpmnElement="MFA1"><di:waypoint x="308" y="164"/><di:waypoint x="308" y="220"/></bpmndi:BPMNEdge>
+      <!-- A: Web redirects to IDP -->
+      <bpmndi:BPMNEdge id="E_MFA2" bpmnElement="MFA2"><di:waypoint x="493" y="354"/><di:waypoint x="493" y="402"/><di:waypoint x="298" y="402"/><di:waypoint x="298" y="450"/></bpmndi:BPMNEdge>
+      <!-- A: IDP shows login to user -->
+      <bpmndi:BPMNEdge id="E_MFA3" bpmnElement="MFA3"><di:waypoint x="478" y="450"/><di:waypoint x="478" y="402"/><di:waypoint x="573" y="402"/><di:waypoint x="573" y="164"/></bpmndi:BPMNEdge>
+      <!-- A: User submits login -->
+      <bpmndi:BPMNEdge id="E_MFA4" bpmnElement="MFA4"><di:waypoint x="648" y="164"/><di:waypoint x="648" y="402"/><di:waypoint x="663" y="402"/><di:waypoint x="663" y="478"/></bpmndi:BPMNEdge>
+      <!-- A: IDP issues code → web callback -->
+      <bpmndi:BPMNEdge id="E_MFA5" bpmnElement="MFA5"><di:waypoint x="1043" y="478"/><di:waypoint x="1043" y="402"/><di:waypoint x="678" y="402"/><di:waypoint x="678" y="354"/></bpmndi:BPMNEdge>
+      <!-- A: Web exchanges code (server→IDP) -->
+      <bpmndi:BPMNEdge id="E_MFA6" bpmnElement="MFA6"><di:waypoint x="863" y="280"/><di:waypoint x="863" y="230"/><di:waypoint x="1233" y="230"/><di:waypoint x="1233" y="478"/></bpmndi:BPMNEdge>
+      <!-- A: IDP returns tokens to web -->
+      <bpmndi:BPMNEdge id="E_MFA7" bpmnElement="MFA7"><di:waypoint x="1428" y="478"/><di:waypoint x="1428" y="230"/><di:waypoint x="1063" y="230"/><di:waypoint x="1063" y="280"/></bpmndi:BPMNEdge>
+      <!-- A: Web serves app to user -->
+      <bpmndi:BPMNEdge id="E_MFA8" bpmnElement="MFA8"><di:waypoint x="1263" y="280"/><di:waypoint x="1263" y="230"/><di:waypoint x="828" y="230"/><di:waypoint x="828" y="164"/></bpmndi:BPMNEdge>
+
+      <!-- B: User opens mobile -->
+      <bpmndi:BPMNEdge id="E_MFB1" bpmnElement="MFB1"><di:waypoint x="1058" y="164"/><di:waypoint x="1058" y="230"/><di:waypoint x="293" y="230"/><di:waypoint x="293" y="850"/></bpmndi:BPMNEdge>
+      <!-- B: Mobile PKCE → IDP authz -->
+      <bpmndi:BPMNEdge id="E_MFB2" bpmnElement="MFB2"><di:waypoint x="683" y="916"/><di:waypoint x="683" y="840"/><di:waypoint x="298" y="840"/><di:waypoint x="298" y="652"/></bpmndi:BPMNEdge>
+      <!-- B: IDP SSO → code back to mobile (no login screen) -->
+      <bpmndi:BPMNEdge id="E_MFB3" bpmnElement="MFB3"><di:waypoint x="568" y="578"/><di:waypoint x="568" y="840"/><di:waypoint x="873" y="840"/><di:waypoint x="873" y="916"/></bpmndi:BPMNEdge>
+      <!-- B: Mobile exchanges code -->
+      <bpmndi:BPMNEdge id="E_MFB4" bpmnElement="MFB4"><di:waypoint x="1068" y="916"/><di:waypoint x="1068" y="840"/><di:waypoint x="683" y="840"/><di:waypoint x="683" y="652"/></bpmndi:BPMNEdge>
+      <!-- B: IDP issues token to mobile -->
+      <bpmndi:BPMNEdge id="E_MFB5" bpmnElement="MFB5"><di:waypoint x="873" y="578"/><di:waypoint x="873" y="780"/><di:waypoint x="1263" y="780"/><di:waypoint x="1263" y="916"/></bpmndi:BPMNEdge>
+
+      <!-- C: User opens form app -->
+      <bpmndi:BPMNEdge id="E_MFC1" bpmnElement="MFC1"><di:waypoint x="1288" y="164"/><di:waypoint x="1288" y="190"/><di:waypoint x="293" y="190"/><di:waypoint x="293" y="1080"/></bpmndi:BPMNEdge>
+      <!-- C: Form POST creds → IDP -->
+      <bpmndi:BPMNEdge id="E_MFC2" bpmnElement="MFC2"><di:waypoint x="488" y="1131"/><di:waypoint x="488" y="1070"/><di:waypoint x="293" y="1070"/><di:waypoint x="293" y="810"/></bpmndi:BPMNEdge>
+      <!-- C: IDP returns token -->
+      <bpmndi:BPMNEdge id="E_MFC3" bpmnElement="MFC3"><di:waypoint x="683" y="678"/><di:waypoint x="683" y="1070"/><di:waypoint x="693" y="1070"/><di:waypoint x="693" y="1131"/></bpmndi:BPMNEdge>
+
+      <!-- D: M2M → IDP client_credentials -->
+      <bpmndi:BPMNEdge id="E_MFD1" bpmnElement="MFD1"><di:waypoint x="488" y="1331"/><di:waypoint x="488" y="1270"/><di:waypoint x="298" y="1270"/><di:waypoint x="298" y="832"/></bpmndi:BPMNEdge>
+      <!-- D: IDP issues M2M token -->
+      <bpmndi:BPMNEdge id="E_MFD2" bpmnElement="MFD2"><di:waypoint x="493" y="758"/><di:waypoint x="493" y="1270"/><di:waypoint x="693" y="1270"/><di:waypoint x="693" y="1405"/></bpmndi:BPMNEdge>
+
+      <!-- E: JWKS flows (resource server validation) -->
+      <bpmndi:BPMNEdge id="E_MFE1" bpmnElement="MFE1"><di:waypoint x="1633" y="478"/><di:waypoint x="1633" y="402"/><di:waypoint x="1463" y="402"/><di:waypoint x="1463" y="354"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MFE2" bpmnElement="MFE2"><di:waypoint x="1633" y="652"/><di:waypoint x="1633" y="820"/><di:waypoint x="1643" y="820"/><di:waypoint x="1643" y="916"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MFE3" bpmnElement="MFE3"><di:waypoint x="1633" y="752"/><di:waypoint x="1633" y="1270"/><di:waypoint x="1073" y="1270"/><di:waypoint x="1073" y="1405"/></bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

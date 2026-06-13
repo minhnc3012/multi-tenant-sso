@@ -1,0 +1,3 @@
+-- V7: No SQL here - default client is seeded at application startup
+-- via DefaultClientInitializer that uses RegisteredClientRepository.
+-- The oauth2_registered_client table (created in V6) is ready to receive seed data.

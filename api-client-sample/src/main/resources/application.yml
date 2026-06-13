@@ -1,0 +1,28 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: api-client-sample
+  security:
+    oauth2:
+      client:
+        registration:
+          # client_credentials — no user, no browser
+          identity-platform-m2m:
+            client-id: realestate-api-client
+            client-secret: realestate-api-secret
+            authorization-grant-type: client_credentials
+            scope: openid,api.read,api.write
+            client-name: "Real Estate API Client"
+        provider:
+          identity-platform-m2m:
+            # Only token-uri needed — no authorization-uri for client_credentials
+            token-uri: http://localhost:8080/oauth2/token
+
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:8080/oauth2/jwks
+
+identity-platform:
+  base-url: http://localhost:8080

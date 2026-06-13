@@ -1,0 +1,51 @@
+package com.identityplatform.core.audit;
+
+public enum AuditEventType {
+
+    // Auth events
+    USER_LOGIN_SUCCESS,
+    USER_LOGIN_FAILED,
+    USER_LOGOUT,
+    MFA_CHALLENGE_SUCCESS,
+    MFA_CHALLENGE_FAILED,
+    TOKEN_ISSUED,
+    TOKEN_REVOKED,
+
+    // Password events
+    PASSWORD_CHANGED,
+    PASSWORD_RESET_REQUESTED,
+    PASSWORD_RESET_COMPLETED,
+
+    // User management
+    USER_INVITED,
+    USER_INVITE_ACCEPTED,
+    USER_CREATED,
+    USER_UPDATED,
+    USER_SUSPENDED,
+    USER_ACTIVATED,
+    USER_DELETED,
+
+    // MFA
+    MFA_ENABLED,
+    MFA_DISABLED,
+
+    // Role management
+    ROLE_CREATED,
+    ROLE_UPDATED,
+    ROLE_DELETED,
+    ROLE_ASSIGNED_TO_USER,
+    ROLE_REMOVED_FROM_USER,
+
+    // Organization
+    ORG_CREATED,
+    ORG_UPDATED,
+    ORG_ACTIVATED,
+    ORG_SUSPENDED,
+
+    // IdP Federation
+    IDP_CONFIGURED,
+    IDP_DISABLED,
+    SSO_LOGIN_SUCCESS,
+    SSO_LOGIN_FAILED,
+    SSO_USER_PROVISIONED
+}

@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Real Estate Platform",
+    "slug": "realestate-mobile",
+    "version": "1.0.0",
+    "scheme": "com.realestate.app",
+    "orientation": "portrait",
+    "platforms": ["ios", "android", "web"],
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

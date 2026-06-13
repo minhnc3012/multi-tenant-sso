@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  id="Definitions_Onboarding"
+  targetNamespace="http://identityplatform.com/bpmn">
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PROCESS: Tenant Onboarding Flow
+       Actors  : Platform Admin | Auth Server API | Email System | Tenant Admin
+       Steps   : Create org → Activate → Invite admin → Accept invite → Ready
+       ═══════════════════════════════════════════════════════════════════ -->
+
+  <bpmn:collaboration id="Collab_Onboarding">
+    <bpmn:participant id="Pool_PlatAdmin"   name="Platform Admin"        processRef="Proc_PlatAdmin"/>
+    <bpmn:participant id="Pool_AuthAPI"     name="Auth Server API  :8080" processRef="Proc_AuthAPI"/>
+    <bpmn:participant id="Pool_Email"       name="Email System (MailHog / SMTP)" processRef="Proc_Email"/>
+    <bpmn:participant id="Pool_TenantAdmin" name="Tenant Org Admin (New)"  processRef="Proc_TenantAdmin"/>
+
+    <bpmn:messageFlow id="MF_CreateOrg"   name="POST /api/v1/organizations"     sourceRef="Task_CreateOrg"    targetRef="Start_CreateOrg"/>
+    <bpmn:messageFlow id="MF_OrgCreated"  name="201 {id, slug}"                 sourceRef="Task_PersistOrg"   targetRef="Task_ReceiveOrgId"/>
+    <bpmn:messageFlow id="MF_ActivateOrg" name="POST /organizations/{id}/activate" sourceRef="Task_ActivateOrg" targetRef="Task_ActivateDB"/>
+    <bpmn:messageFlow id="MF_OrgActive"   name="200 {status: ACTIVE}"           sourceRef="Task_SetActive"    targetRef="Task_ConfirmActive"/>
+    <bpmn:messageFlow id="MF_InviteUser"  name="POST /api/v1/users/invite"      sourceRef="Task_InviteAdmin"  targetRef="Task_CreateUser"/>
+    <bpmn:messageFlow id="MF_InviteOk"    name="204 (invite queued)"            sourceRef="Task_QueueEmail"   targetRef="Task_ConfirmInvite"/>
+    <bpmn:messageFlow id="MF_SendEmail"   name="Send invite email"              sourceRef="Task_EmitEmail"    targetRef="Start_Email"/>
+    <bpmn:messageFlow id="MF_EmailSent"   name="Email delivered"                sourceRef="End_Email"         targetRef="Task_CheckInbox"/>
+    <bpmn:messageFlow id="MF_AcceptInvite" name="POST /invite/{token}/accept"   sourceRef="Task_AcceptLink"   targetRef="Task_ValidateToken"/>
+    <bpmn:messageFlow id="MF_Activated"   name="200 User activated"             sourceRef="Task_ActivateUser" targetRef="Task_LoginReady"/>
+  </bpmn:collaboration>
+
+  <!-- ─── PLATFORM ADMIN PROCESS ─────────────────────────────────── -->
+  <bpmn:process id="Proc_PlatAdmin" isExecutable="false">
+    <bpmn:startEvent  id="Start_PlatAdmin"   name="Cần onboard&#10;tenant mới"/>
+    <bpmn:userTask    id="Task_CreateOrg"    name="POST /api/v1/organizations&#10;{name, slug, primaryDomain,&#10;adminEmail, mfaRequired}"/>
+    <bpmn:serviceTask id="Task_ReceiveOrgId" name="Nhận orgId"/>
+    <bpmn:userTask    id="Task_ActivateOrg"  name="POST /organizations/{id}/activate&#10;(sau khi verify thông tin)"/>
+    <bpmn:serviceTask id="Task_ConfirmActive" name="Org status: ACTIVE"/>
+    <bpmn:userTask    id="Task_InviteAdmin"  name="POST /api/v1/users/invite&#10;X-Organization-Slug: {slug}&#10;{email, firstName, lastName}"/>
+    <bpmn:serviceTask id="Task_ConfirmInvite" name="Invite gửi thành công"/>
+    <bpmn:userTask    id="Task_MonitorSetup" name="Theo dõi trạng thái&#10;(Admin đã accept invite?)"/>
+    <bpmn:endEvent    id="End_PlatAdmin"     name="Tenant sẵn sàng hoạt động"/>
+
+    <bpmn:sequenceFlow id="SF_PA1" sourceRef="Start_PlatAdmin"   targetRef="Task_CreateOrg"/>
+    <bpmn:sequenceFlow id="SF_PA2" sourceRef="Task_ReceiveOrgId" targetRef="Task_ActivateOrg"/>
+    <bpmn:sequenceFlow id="SF_PA3" sourceRef="Task_ConfirmActive" targetRef="Task_InviteAdmin"/>
+    <bpmn:sequenceFlow id="SF_PA4" sourceRef="Task_ConfirmInvite" targetRef="Task_MonitorSetup"/>
+    <bpmn:sequenceFlow id="SF_PA5" sourceRef="Task_MonitorSetup" targetRef="End_PlatAdmin"/>
+  </bpmn:process>
+
+  <!-- ─── AUTH SERVER API PROCESS ────────────────────────────────── -->
+  <bpmn:process id="Proc_AuthAPI" isExecutable="false">
+    <bpmn:startEvent  id="Start_CreateOrg"  name="POST /api/v1/organizations"/>
+    <bpmn:serviceTask id="Task_ValidateOrg" name="Validate request&#10;(slug unique, domain unique)"/>
+    <bpmn:exclusiveGateway id="GW_OrgValid" name="Valid?"/>
+    <bpmn:serviceTask id="Task_PersistOrg"  name="INSERT organizations&#10;status=PENDING_SETUP&#10;Generate orgId (UUID)"/>
+
+    <bpmn:serviceTask id="Task_ActivateDB"   name="UPDATE organizations&#10;SET status=ACTIVE&#10;WHERE id=?"/>
+    <bpmn:serviceTask id="Task_SetActive"    name="Return 200 {status: ACTIVE}"/>
+
+    <bpmn:serviceTask id="Task_CreateUser"   name="INSERT users&#10;email, org_id&#10;status=PENDING_VERIFICATION&#10;inviteToken=UUID (TTL 72h)"/>
+    <bpmn:serviceTask id="Task_QueueEmail"   name="Publish UserInvitedEvent&#10;→ @ApplicationModuleListener"/>
+    <bpmn:serviceTask id="Task_EmitEmail"    name="InviteService.sendInvite()&#10;Build invite URL:&#10;/invite/{token}/accept"/>
+
+    <bpmn:serviceTask id="Task_ValidateToken" name="POST /invite/{token}/accept&#10;Validate inviteToken&#10;(not expired, not used)"/>
+    <bpmn:exclusiveGateway id="GW_TokenOK"  name="Token valid?"/>
+    <bpmn:serviceTask id="Task_SetPassword"  name="User sets password&#10;Hash bcrypt(12)"/>
+    <bpmn:serviceTask id="Task_ActivateUser" name="UPDATE users&#10;SET status=ACTIVE&#10;inviteToken=null&#10;emailVerifiedAt=now()"/>
+
+    <bpmn:endEvent id="End_OrgInvalid"   name="400 Validation Error"/>
+    <bpmn:endEvent id="End_TokenInvalid" name="400 Token expired/invalid"/>
+    <bpmn:endEvent id="End_UserActive"   name="User activated"/>
+
+    <bpmn:sequenceFlow id="SF_AP1"  sourceRef="Start_CreateOrg"  targetRef="Task_ValidateOrg"/>
+    <bpmn:sequenceFlow id="SF_AP2"  sourceRef="Task_ValidateOrg" targetRef="GW_OrgValid"/>
+    <bpmn:sequenceFlow id="SF_AP3"  name="No"  sourceRef="GW_OrgValid" targetRef="End_OrgInvalid"/>
+    <bpmn:sequenceFlow id="SF_AP4"  name="Yes" sourceRef="GW_OrgValid" targetRef="Task_PersistOrg"/>
+    <bpmn:sequenceFlow id="SF_AP5"  sourceRef="Task_ActivateDB"  targetRef="Task_SetActive"/>
+    <bpmn:sequenceFlow id="SF_AP6"  sourceRef="Task_CreateUser"  targetRef="Task_QueueEmail"/>
+    <bpmn:sequenceFlow id="SF_AP7"  sourceRef="Task_QueueEmail"  targetRef="Task_EmitEmail"/>
+    <bpmn:sequenceFlow id="SF_AP8"  sourceRef="Task_ValidateToken" targetRef="GW_TokenOK"/>
+    <bpmn:sequenceFlow id="SF_AP9"  name="No"  sourceRef="GW_TokenOK" targetRef="End_TokenInvalid"/>
+    <bpmn:sequenceFlow id="SF_AP10" name="Yes" sourceRef="GW_TokenOK" targetRef="Task_SetPassword"/>
+    <bpmn:sequenceFlow id="SF_AP11" sourceRef="Task_SetPassword" targetRef="Task_ActivateUser"/>
+    <bpmn:sequenceFlow id="SF_AP12" sourceRef="Task_ActivateUser" targetRef="End_UserActive"/>
+  </bpmn:process>
+
+  <!-- ─── EMAIL SYSTEM PROCESS ────────────────────────────────────── -->
+  <bpmn:process id="Proc_Email" isExecutable="false">
+    <bpmn:startEvent  id="Start_Email"  name="Nhận invite email request"/>
+    <bpmn:serviceTask id="Task_BuildEmail" name="Build email HTML&#10;To: {adminEmail}&#10;Subject: Invitation to {orgName}&#10;Body: click link to activate"/>
+    <bpmn:serviceTask id="Task_DeliverEmail" name="SMTP send&#10;(MailHog in dev,&#10;SES/SendGrid in prod)"/>
+    <bpmn:endEvent    id="End_Email"    name="Email delivered"/>
+
+    <bpmn:sequenceFlow id="SF_E1" sourceRef="Start_Email"       targetRef="Task_BuildEmail"/>
+    <bpmn:sequenceFlow id="SF_E2" sourceRef="Task_BuildEmail"   targetRef="Task_DeliverEmail"/>
+    <bpmn:sequenceFlow id="SF_E3" sourceRef="Task_DeliverEmail" targetRef="End_Email"/>
+  </bpmn:process>
+
+  <!-- ─── TENANT ADMIN PROCESS ────────────────────────────────────── -->
+  <bpmn:process id="Proc_TenantAdmin" isExecutable="false">
+    <bpmn:startEvent  id="Start_TenantAdmin" name="Chờ email invite"/>
+    <bpmn:userTask    id="Task_CheckInbox"   name="Nhận email&#10;'Invitation to {orgName}'"/>
+    <bpmn:userTask    id="Task_ClickLink"    name="Click invite link&#10;/invite/{token}/accept"/>
+    <bpmn:userTask    id="Task_AcceptLink"   name="Điền password mới&#10;POST /invite/{token}/accept"/>
+    <bpmn:serviceTask id="Task_LoginReady"   name="Account activated!&#10;Có thể login tại&#10;http://localhost:8080/login"/>
+    <bpmn:userTask    id="Task_FirstLogin"   name="Đăng nhập lần đầu&#10;email + password mới"/>
+    <bpmn:userTask    id="Task_ManageUsers"  name="Invite users vào org&#10;POST /api/v1/users/invite&#10;(với role ORG_ADMIN)"/>
+    <bpmn:endEvent    id="End_TenantAdmin"   name="Tenant fully operational"/>
+
+    <bpmn:sequenceFlow id="SF_TA1" sourceRef="Start_TenantAdmin" targetRef="Task_CheckInbox"/>
+    <bpmn:sequenceFlow id="SF_TA2" sourceRef="Task_CheckInbox"   targetRef="Task_ClickLink"/>
+    <bpmn:sequenceFlow id="SF_TA3" sourceRef="Task_ClickLink"    targetRef="Task_AcceptLink"/>
+    <bpmn:sequenceFlow id="SF_TA4" sourceRef="Task_LoginReady"   targetRef="Task_FirstLogin"/>
+    <bpmn:sequenceFlow id="SF_TA5" sourceRef="Task_FirstLogin"   targetRef="Task_ManageUsers"/>
+    <bpmn:sequenceFlow id="SF_TA6" sourceRef="Task_ManageUsers"  targetRef="End_TenantAdmin"/>
+  </bpmn:process>
+
+  <!-- ═══════════════════════════════ DIAGRAM LAYOUT ════════════════ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_4">
+    <bpmndi:BPMNPlane id="BPMNPlane_4" bpmnElement="Collab_Onboarding">
+
+      <!-- PLATFORM ADMIN POOL -->
+      <bpmndi:BPMNShape id="S_Pool_PlatAdmin" bpmnElement="Pool_PlatAdmin" isHorizontal="true">
+        <dc:Bounds x="120" y="80" width="1540" height="150"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_PA"       bpmnElement="Start_PlatAdmin">   <dc:Bounds x="192" y="137" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_CreateOrg"      bpmnElement="Task_CreateOrg">    <dc:Bounds x="278" y="118" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ReceiveOrgId"   bpmnElement="Task_ReceiveOrgId"> <dc:Bounds x="488" y="118" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ActivateOrg"    bpmnElement="Task_ActivateOrg">  <dc:Bounds x="668" y="118" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ConfirmActive"  bpmnElement="Task_ConfirmActive"><dc:Bounds x="878" y="118" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_InviteAdmin"    bpmnElement="Task_InviteAdmin">  <dc:Bounds x="1058" y="118" width="160" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ConfirmInvite"  bpmnElement="Task_ConfirmInvite"><dc:Bounds x="1278" y="118" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_MonitorSetup"   bpmnElement="Task_MonitorSetup"> <dc:Bounds x="1458" y="118" width="130" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_PA"         bpmnElement="End_PlatAdmin">     <dc:Bounds x="1648" y="137" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_PA1" bpmnElement="SF_PA1"><di:waypoint x="228" y="155"/><di:waypoint x="278" y="155"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_PA2" bpmnElement="SF_PA2"><di:waypoint x="618" y="155"/><di:waypoint x="668" y="155"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_PA3" bpmnElement="SF_PA3"><di:waypoint x="1008" y="155"/><di:waypoint x="1058" y="155"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_PA4" bpmnElement="SF_PA4"><di:waypoint x="1408" y="155"/><di:waypoint x="1458" y="155"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_PA5" bpmnElement="SF_PA5"><di:waypoint x="1588" y="155"/><di:waypoint x="1648" y="155"/></bpmndi:BPMNEdge>
+
+      <!-- AUTH SERVER POOL -->
+      <bpmndi:BPMNShape id="S_Pool_Auth" bpmnElement="Pool_AuthAPI" isHorizontal="true">
+        <dc:Bounds x="120" y="260" width="1540" height="280"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_CreateOrg" bpmnElement="Start_CreateOrg"> <dc:Bounds x="278" y="317" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ValidateOrg"     bpmnElement="Task_ValidateOrg"><dc:Bounds x="364" y="298" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_OrgValid"     bpmnElement="GW_OrgValid" isMarkerVisible="true"><dc:Bounds x="554" y="310" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_PersistOrg"      bpmnElement="Task_PersistOrg"> <dc:Bounds x="654" y="298" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ActivateDB"      bpmnElement="Task_ActivateDB"> <dc:Bounds x="840" y="298" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SetActive"       bpmnElement="Task_SetActive">  <dc:Bounds x="840" y="400" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_CreateUser"      bpmnElement="Task_CreateUser"> <dc:Bounds x="1040" y="298" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_QueueEmail"      bpmnElement="Task_QueueEmail"> <dc:Bounds x="1040" y="400" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_EmitEmail"       bpmnElement="Task_EmitEmail">  <dc:Bounds x="1240" y="400" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ValidateToken"   bpmnElement="Task_ValidateToken"><dc:Bounds x="1240" y="298" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_GW_TokenOK"      bpmnElement="GW_TokenOK" isMarkerVisible="true"><dc:Bounds x="1440" y="310" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_SetPassword"     bpmnElement="Task_SetPassword"> <dc:Bounds x="1440" y="400" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ActivateUser"    bpmnElement="Task_ActivateUser"><dc:Bounds x="1440" y="490" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_OrgInvalid"  bpmnElement="End_OrgInvalid">  <dc:Bounds x="554" y="410" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_TokenInvalid" bpmnElement="End_TokenInvalid"><dc:Bounds x="1540" y="317" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_UserActive"  bpmnElement="End_UserActive">  <dc:Bounds x="1540" y="507" width="36"  height="36"/></bpmndi:BPMNShape>
+      <!-- auth edges -->
+      <bpmndi:BPMNEdge id="E_AP1" bpmnElement="SF_AP1"> <di:waypoint x="314" y="335"/><di:waypoint x="364" y="335"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP2" bpmnElement="SF_AP2"> <di:waypoint x="504" y="335"/><di:waypoint x="554" y="335"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP3" bpmnElement="SF_AP3"> <di:waypoint x="579" y="360"/><di:waypoint x="579" y="410"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP4" bpmnElement="SF_AP4"> <di:waypoint x="604" y="335"/><di:waypoint x="654" y="335"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP5" bpmnElement="SF_AP5"> <di:waypoint x="910" y="372"/><di:waypoint x="910" y="400"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP6" bpmnElement="SF_AP6"> <di:waypoint x="1115" y="372"/><di:waypoint x="1115" y="400"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP7" bpmnElement="SF_AP7"> <di:waypoint x="1190" y="437"/><di:waypoint x="1240" y="437"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP8" bpmnElement="SF_AP8"> <di:waypoint x="1390" y="335"/><di:waypoint x="1440" y="335"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP9" bpmnElement="SF_AP9"> <di:waypoint x="1490" y="335"/><di:waypoint x="1540" y="335"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP10" bpmnElement="SF_AP10"><di:waypoint x="1465" y="360"/><di:waypoint x="1465" y="400"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP11" bpmnElement="SF_AP11"><di:waypoint x="1510" y="437"/><di:waypoint x="1515" y="490"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_AP12" bpmnElement="SF_AP12"><di:waypoint x="1540" y="525"/></bpmndi:BPMNEdge>
+
+      <!-- EMAIL POOL -->
+      <bpmndi:BPMNShape id="S_Pool_Email" bpmnElement="Pool_Email" isHorizontal="true">
+        <dc:Bounds x="120" y="570" width="1540" height="140"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_Email"    bpmnElement="Start_Email">      <dc:Bounds x="1240" y="617" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_BuildEmail"     bpmnElement="Task_BuildEmail">  <dc:Bounds x="1326" y="598" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_DeliverEmail"   bpmnElement="Task_DeliverEmail"><dc:Bounds x="1500" y="598" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_Email"      bpmnElement="End_Email">        <dc:Bounds x="1660" y="617" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_E1" bpmnElement="SF_E1"><di:waypoint x="1276" y="635"/><di:waypoint x="1326" y="635"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_E2" bpmnElement="SF_E2"><di:waypoint x="1476" y="635"/><di:waypoint x="1500" y="635"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_E3" bpmnElement="SF_E3"><di:waypoint x="1640" y="635"/><di:waypoint x="1660" y="635"/></bpmndi:BPMNEdge>
+
+      <!-- TENANT ADMIN POOL -->
+      <bpmndi:BPMNShape id="S_Pool_TenantAdmin" bpmnElement="Pool_TenantAdmin" isHorizontal="true">
+        <dc:Bounds x="120" y="740" width="1540" height="160"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_Start_TA"     bpmnElement="Start_TenantAdmin"> <dc:Bounds x="192" y="801" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_CheckInbox"   bpmnElement="Task_CheckInbox">   <dc:Bounds x="278" y="782" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ClickLink"    bpmnElement="Task_ClickLink">    <dc:Bounds x="468" y="782" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_AcceptLink"   bpmnElement="Task_AcceptLink">   <dc:Bounds x="658" y="782" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_LoginReady"   bpmnElement="Task_LoginReady">   <dc:Bounds x="858" y="782" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_FirstLogin"   bpmnElement="Task_FirstLogin">   <dc:Bounds x="1048" y="782" width="140" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_ManageUsers"  bpmnElement="Task_ManageUsers">  <dc:Bounds x="1238" y="782" width="150" height="74"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_End_TA"       bpmnElement="End_TenantAdmin">   <dc:Bounds x="1448" y="801" width="36"  height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="E_TA1" bpmnElement="SF_TA1"><di:waypoint x="228" y="819"/><di:waypoint x="278" y="819"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_TA2" bpmnElement="SF_TA2"><di:waypoint x="418" y="819"/><di:waypoint x="468" y="819"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_TA3" bpmnElement="SF_TA3"><di:waypoint x="608" y="819"/><di:waypoint x="658" y="819"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_TA4" bpmnElement="SF_TA4"><di:waypoint x="998" y="819"/><di:waypoint x="1048" y="819"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_TA5" bpmnElement="SF_TA5"><di:waypoint x="1188" y="819"/><di:waypoint x="1238" y="819"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_TA6" bpmnElement="SF_TA6"><di:waypoint x="1388" y="819"/><di:waypoint x="1448" y="819"/></bpmndi:BPMNEdge>
+
+      <!-- Message flows -->
+      <bpmndi:BPMNEdge id="E_MF_CreateOrg"   bpmnElement="MF_CreateOrg">    <di:waypoint x="353" y="192"/><di:waypoint x="353" y="240"/><di:waypoint x="296" y="240"/><di:waypoint x="296" y="317"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_OrgCreated"  bpmnElement="MF_OrgCreated">   <di:waypoint x="724" y="298"/><di:waypoint x="724" y="240"/><di:waypoint x="553" y="240"/><di:waypoint x="553" y="192"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_ActivateOrg" bpmnElement="MF_ActivateOrg">  <di:waypoint x="743" y="192"/><di:waypoint x="743" y="240"/><di:waypoint x="910" y="240"/><di:waypoint x="910" y="298"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_OrgActive"   bpmnElement="MF_OrgActive">    <di:waypoint x="910" y="400"/><di:waypoint x="910" y="240"/><di:waypoint x="943" y="240"/><di:waypoint x="943" y="192"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_InviteUser"  bpmnElement="MF_InviteUser">   <di:waypoint x="1138" y="192"/><di:waypoint x="1138" y="240"/><di:waypoint x="1115" y="240"/><di:waypoint x="1115" y="298"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_InviteOk"    bpmnElement="MF_InviteOk">     <di:waypoint x="1115" y="400"/><di:waypoint x="1115" y="240"/><di:waypoint x="1343" y="240"/><di:waypoint x="1343" y="192"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_SendEmail"   bpmnElement="MF_SendEmail">    <di:waypoint x="1315" y="474"/><di:waypoint x="1315" y="540"/><di:waypoint x="1258" y="540"/><di:waypoint x="1258" y="617"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_EmailSent"   bpmnElement="MF_EmailSent">    <di:waypoint x="1678" y="635"/><di:waypoint x="1678" y="700"/><di:waypoint x="348" y="700"/><di:waypoint x="348" y="782"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_AcceptInvite" bpmnElement="MF_AcceptInvite"><di:waypoint x="728" y="782"/><di:waypoint x="728" y="720"/><di:waypoint x="1315" y="720"/><di:waypoint x="1315" y="372"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="E_MF_Activated"   bpmnElement="MF_Activated">    <di:waypoint x="1515" y="490"/><di:waypoint x="1515" y="720"/><di:waypoint x="928" y="720"/><di:waypoint x="928" y="782"/></bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

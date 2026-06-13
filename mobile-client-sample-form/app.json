@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Real Estate Platform (Form Login)",
+    "slug": "realestate-mobile-form",
+    "scheme": "com.realestate.app.form",
+    "version": "1.0.0",
+    "platforms": ["ios", "android", "web"],
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

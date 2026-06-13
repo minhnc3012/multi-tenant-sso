@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('OAuth2 Clients')}"></head>
+<body class="d-flex">
+
+<div th:replace="~{fragments/layout :: sidebar}"></div>
+
+<main class="main-content">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h4 class="mb-0 fw-bold">OAuth2 Clients</h4>
+            <small class="text-muted">Register and manage OAuth2 client applications per organization</small>
+        </div>
+        <button class="btn btn-primary" onclick="showCreateModal()">
+            <i class="bi bi-plus-lg me-1"></i>Register Client
+        </button>
+    </div>
+
+    <!-- Org filter -->
+    <div class="card mb-3">
+        <div class="card-body py-2 d-flex align-items-center gap-3">
+            <label class="form-label mb-0 small fw-semibold text-nowrap">Filter by Org:</label>
+            <select id="orgFilter" class="form-select form-select-sm w-auto" onchange="loadClients(this.value)">
+                <option value="">— All organizations —</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-3">Client ID</th>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Organization</th>
+                        <th>Scopes</th>
+                        <th>Registered</th>
+                        <th class="pe-3">Description</th>
+                    </tr>
+                </thead>
+                <tbody id="clientsTable">
+                    <tr><td colspan="7" class="text-center py-4 text-muted">Select an organization to view its clients, or leave blank to view all.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<!-- Register Client Modal -->
+<div class="modal fade" id="createModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Register OAuth2 Client</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Organization *</label>
+                    <select id="c-orgId" class="form-select" onchange="onClientOrgChange(this.value)">
+                        <option value="">— Select organization —</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Application Name *</label>
+                    <input id="c-name" class="form-control" placeholder="My Parking App">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Client Type *</label>
+                    <select id="c-type" class="form-select" onchange="onTypeChange(this.value)">
+                        <option value="WEB_CLIENT">WEB_CLIENT — Web app (authorization_code + PKCE)</option>
+                        <option value="MOBILE_CLIENT">MOBILE_CLIENT — Mobile/SPA (PKCE only)</option>
+                        <option value="API_CLIENT">API_CLIENT — Backend service (client_credentials)</option>
+                        <option value="NATIVE_CLIENT">NATIVE_CLIENT — Native app (PKCE)</option>
+                    </select>
+                </div>
+                <div id="redirectSection" class="mb-3">
+                    <label class="form-label small fw-semibold">Redirect URIs <small class="text-muted">(one per line)</small></label>
+                    <textarea id="c-redirectUris" class="form-control" rows="2"
+                              placeholder="http://localhost:8095/login/oauth2/code/identity-platform"></textarea>
+                </div>
+                <div id="postLogoutSection" class="mb-3">
+                    <label class="form-label small fw-semibold">Post-Logout Redirect URIs <small class="text-muted">(one per line)</small></label>
+                    <textarea id="c-postLogoutUris" class="form-control" rows="2"
+                              placeholder="http://localhost:8095/"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Additional Scopes <small class="text-muted">(space-separated, openid+profile+email always included)</small></label>
+                    <input id="c-scopes" class="form-control" placeholder="users:read users:write">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Client ID Hint <small class="text-muted">(optional — auto-generated if blank)</small></label>
+                    <input id="c-clientIdHint" class="form-control" placeholder="parking-admin-web">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Description</label>
+                    <input id="c-description" class="form-control" placeholder="Kerb Parking Admin web app">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="registerClient()">Register</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Secret Display Modal (shown once after registration) -->
+<div class="modal fade" id="secretModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning-subtle">
+                <h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>Client Registered — Save the Secret</h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong>This secret is shown only once.</strong> Copy it now and store it securely.
+                    It cannot be retrieved again after closing this dialog.
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Client ID</label>
+                    <div class="input-group">
+                        <input type="text" id="s-clientId" class="form-control font-monospace" readonly>
+                        <button class="btn btn-outline-secondary" onclick="copyField('s-clientId')"><i class="bi bi-clipboard"></i></button>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Client Secret</label>
+                    <div class="input-group">
+                        <input type="text" id="s-clientSecret" class="form-control font-monospace text-danger fw-bold" readonly>
+                        <button class="btn btn-outline-secondary" onclick="copyField('s-clientSecret')"><i class="bi bi-clipboard"></i></button>
+                    </div>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label small fw-semibold">Scopes granted</label>
+                    <div id="s-scopes" class="d-flex flex-wrap gap-1"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeSecretModal()">I have saved the secret</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script th:replace="~{fragments/layout :: common-js}"></script>
+<script>
+let orgMap = {};
+const TYPE_COLOR = { WEB_CLIENT:'primary', MOBILE_CLIENT:'success', API_CLIENT:'warning', NATIVE_CLIENT:'info' };
+
+async function loadOrgOptions() {
+    try {
+        const data = await apiFetch('/api/v1/organizations?size=200&sort=name,asc');
+        orgMap = Object.fromEntries(data.content.map(o => [o.id, o.name]));
+        const orgs = data.content;
+        const filterSel  = document.getElementById('orgFilter');
+        const createSel  = document.getElementById('c-orgId');
+        orgs.forEach(o => {
+            const opt = `<option value="${o.id}">${o.name} (${o.slug})</option>`;
+            filterSel.insertAdjacentHTML('beforeend', opt);
+            createSel.insertAdjacentHTML('beforeend', opt);
+        });
+    } catch (e) { showError('Failed to load organizations: ' + e.message); }
+}
+
+async function loadClients(orgId) {
+    const tbody = document.getElementById('clientsTable');
+    if (!orgId) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">Select an organization to view its clients.</td></tr>';
+        return;
+    }
+    try {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-3 text-muted">Loading...</td></tr>';
+        const clients = await apiFetch(`/api/v1/organizations/${orgId}/clients`);
+        if (!clients.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">No clients registered for this organization.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = clients.map(c => `
+            <tr>
+                <td class="ps-3"><code>${c.clientId}</code></td>
+                <td>${c.clientName ?? '—'}</td>
+                <td><span class="badge bg-${TYPE_COLOR[c.clientType] ?? 'secondary'}">${c.clientType ?? '—'}</span></td>
+                <td><span class="badge bg-light text-dark border">${orgMap[c.organizationId] ?? c.organizationId ?? '—'}</span></td>
+                <td>${(c.scopes ?? []).map(s => `<span class="badge bg-info badge-role">${s}</span>`).join(' ') || '—'}</td>
+                <td class="text-muted small">${c.issuedAt ? new Date(c.issuedAt).toLocaleDateString() : '—'}</td>
+                <td class="pe-3 text-muted small">${c.description ?? '—'}</td>
+            </tr>`).join('');
+    } catch (e) { showError('Failed to load clients: ' + e.message); }
+}
+
+function onTypeChange(type) {
+    const redirectSection    = document.getElementById('redirectSection');
+    const postLogoutSection  = document.getElementById('postLogoutSection');
+    const isM2M = type === 'API_CLIENT';
+    redirectSection.style.display   = isM2M ? 'none' : '';
+    postLogoutSection.style.display = isM2M ? 'none' : '';
+}
+
+function onClientOrgChange(orgId) {
+    // Could pre-fill clientIdHint based on org slug
+}
+
+function showCreateModal() {
+    document.getElementById('c-name').value          = '';
+    document.getElementById('c-type').value          = 'WEB_CLIENT';
+    document.getElementById('c-redirectUris').value  = '';
+    document.getElementById('c-postLogoutUris').value = '';
+    document.getElementById('c-scopes').value        = '';
+    document.getElementById('c-clientIdHint').value  = '';
+    document.getElementById('c-description').value   = '';
+    onTypeChange('WEB_CLIENT');
+    new bootstrap.Modal(document.getElementById('createModal')).show();
+}
+
+async function registerClient() {
+    const orgId       = document.getElementById('c-orgId').value;
+    const name        = document.getElementById('c-name').value.trim();
+    const clientType  = document.getElementById('c-type').value;
+
+    if (!orgId)  { showError('Please select an organization'); return; }
+    if (!name)   { showError('Application name is required'); return; }
+
+    const redirectLines    = document.getElementById('c-redirectUris').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const postLogoutLines  = document.getElementById('c-postLogoutUris').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const scopesRaw        = document.getElementById('c-scopes').value.trim();
+    const additionalScopes = scopesRaw ? scopesRaw.split(/[\s,]+/).filter(Boolean) : [];
+    const clientIdHint     = document.getElementById('c-clientIdHint').value.trim() || null;
+    const description      = document.getElementById('c-description').value.trim() || null;
+
+    const body = {
+        name, clientType,
+        redirectUris:         redirectLines.length   ? redirectLines   : null,
+        postLogoutRedirectUris: postLogoutLines.length ? postLogoutLines : null,
+        additionalScopes:     additionalScopes.length ? additionalScopes : null,
+        clientIdHint,
+        description
+    };
+
+    try {
+        const result = await apiFetch(`/api/v1/organizations/${orgId}/clients`, {
+            method: 'POST',
+            body: JSON.stringify(body)
+        });
+        bootstrap.Modal.getInstance(document.getElementById('createModal')).hide();
+        showSecretModal(result);
+        loadClients(orgId);
+    } catch (e) { showError(e.message); }
+}
+
+function showSecretModal(client) {
+    document.getElementById('s-clientId').value     = client.clientId;
+    document.getElementById('s-clientSecret').value = client.clientSecret;
+    const scopesDiv = document.getElementById('s-scopes');
+    scopesDiv.innerHTML = (client.scopes ?? []).map(s =>
+        `<span class="badge bg-info">${s}</span>`).join(' ');
+    new bootstrap.Modal(document.getElementById('secretModal')).show();
+}
+
+function closeSecretModal() {
+    bootstrap.Modal.getInstance(document.getElementById('secretModal')).hide();
+    document.getElementById('s-clientSecret').value = '••••••••••••';
+}
+
+function copyField(id) {
+    const val = document.getElementById(id).value;
+    navigator.clipboard.writeText(val).then(() => showToast('Copied!'));
+}
+
+loadOrgOptions();
+</script>
+</body>
+</html>

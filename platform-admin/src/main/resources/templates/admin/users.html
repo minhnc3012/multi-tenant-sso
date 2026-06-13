@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('Users')}"></head>
+<body class="d-flex">
+
+<div th:replace="~{fragments/layout :: sidebar}"></div>
+
+<main class="main-content">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h4 class="mb-0 fw-bold">Users</h4>
+            <small class="text-muted" th:text="${isPlatformAdmin} ? 'All organizations' : 'Organization: ' + ${orgName}"></small>
+        </div>
+        <button class="btn btn-primary" onclick="openInviteModal()">
+            <i class="bi bi-person-plus me-1"></i>Invite User
+        </button>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="p-3 border-bottom d-flex gap-2 flex-wrap">
+                <input type="text" id="searchInput" class="form-control form-control-sm w-auto"
+                       placeholder="Search by email or name..." oninput="filterTable()">
+                <select id="statusFilter" class="form-select form-select-sm w-auto" onchange="filterTable()">
+                    <option value="">All status</option>
+                    <option>ACTIVE</option>
+                    <option>SUSPENDED</option>
+                    <option>PENDING_VERIFICATION</option>
+                    <option>LOCKED</option>
+                </select>
+                <select th:if="${isPlatformAdmin}" id="orgFilter" class="form-select form-select-sm w-auto" onchange="filterTable()">
+                    <option value="">All organizations</option>
+                </select>
+            </div>
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-3">Email</th>
+                        <th>Name</th>
+                        <th th:if="${isPlatformAdmin}">Organization</th>
+                        <th>Status</th>
+                        <th>Auth</th>
+                        <th>Roles</th>
+                        <th>Last Login</th>
+                        <th class="pe-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTable">
+                    <tr>
+                        <td th:colspan="${isPlatformAdmin} ? 8 : 7" class="text-center py-4 text-muted">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="d-flex justify-content-between align-items-center p-3 border-top">
+                <small class="text-muted" id="paginationInfo"></small>
+                <div class="d-flex gap-1" id="paginationButtons"></div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- Invite Modal -->
+<div class="modal fade" id="inviteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Invite User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div th:if="${isPlatformAdmin}" class="mb-3">
+                    <label class="form-label small fw-semibold">Organization *</label>
+                    <select id="i-orgId" class="form-select" onchange="onInviteOrgChange(this.value)">
+                        <option value="">— Select organization —</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Email *</label>
+                    <input type="email" id="i-email" class="form-control" placeholder="user@company.com">
+                </div>
+                <div class="row">
+                    <div class="col mb-3">
+                        <label class="form-label small fw-semibold">First Name *</label>
+                        <input type="text" id="i-firstName" class="form-control">
+                    </div>
+                    <div class="col mb-3">
+                        <label class="form-label small fw-semibold">Last Name *</label>
+                        <input type="text" id="i-lastName" class="form-control">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Role *</label>
+                    <select id="i-role" class="form-select">
+                        <option value="ORG_MEMBER">ORG_MEMBER — Regular member</option>
+                        <option value="ORG_ADMIN">ORG_ADMIN — Organization admin</option>
+                        <option value="PLATFORM_ADMIN">PLATFORM_ADMIN — Platform admin</option>
+                    </select>
+                    <div class="form-text text-muted" id="i-role-hint">Select organization first to load available roles</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="inviteUser()">Send Invite</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit User Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="e-userId">
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Email</label>
+                    <input type="email" id="e-email" class="form-control">
+                </div>
+                <div class="row">
+                    <div class="col mb-3">
+                        <label class="form-label small fw-semibold">First Name</label>
+                        <input type="text" id="e-firstName" class="form-control">
+                    </div>
+                    <div class="col mb-3">
+                        <label class="form-label small fw-semibold">Last Name</label>
+                        <input type="text" id="e-lastName" class="form-control">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Avatar URL</label>
+                    <input type="url" id="e-avatarUrl" class="form-control" placeholder="https://...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="saveUser()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Roles Modal -->
+<div class="modal fade" id="roleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Manage Roles</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="rm-userId">
+                <input type="hidden" id="rm-orgId">
+                <p class="text-muted small" id="rm-userEmail"></p>
+                <div id="rm-rolesList" class="d-flex flex-column gap-2"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script th:replace="~{fragments/layout :: common-js}"></script>
+<script>
+let allUsers = [];
+let orgMap = {};
+let currentPage = 0;
+const PAGE_SIZE = 20;
+
+const COLS = IS_PLATFORM_ADMIN ? 8 : 7;
+
+const STATUS_COLORS = {
+    ACTIVE: 'success', PENDING_VERIFICATION: 'warning',
+    SUSPENDED: 'secondary', LOCKED: 'danger', DEACTIVATED: 'dark'
+};
+
+async function loadUsers(page = 0) {
+    const url = IS_PLATFORM_ADMIN
+        ? `/api/v1/users/all?page=${page}&size=${PAGE_SIZE}&sort=createdAt,desc`
+        : `/api/v1/users?page=${page}&size=${PAGE_SIZE}&sort=createdAt,desc`;
+    try {
+        const data = await apiFetch(url);
+        allUsers = data.content;
+        currentPage = page;
+        renderTable(allUsers);
+        renderPagination(data);
+    } catch (e) { showError('Failed to load users: ' + e.message); }
+}
+
+async function loadOrgs() {
+    try {
+        const data = await apiFetch('/api/v1/organizations?size=200&sort=name,asc');
+        orgMap = Object.fromEntries(data.content.map(o => [o.id, o.name]));
+        const orgs = data.content;
+
+        const filterSel = document.getElementById('orgFilter');
+        const inviteSel = document.getElementById('i-orgId');
+        orgs.forEach(o => {
+            const opt = `<option value="${o.id}">${o.name}</option>`;
+            if (filterSel) filterSel.insertAdjacentHTML('beforeend', opt);
+            if (inviteSel) inviteSel.insertAdjacentHTML('beforeend', opt);
+        });
+    } catch (e) { /* non-fatal */ }
+}
+
+async function onInviteOrgChange(orgId) {
+    const roleSel  = document.getElementById('i-role');
+    const roleHint = document.getElementById('i-role-hint');
+    if (!orgId) {
+        roleSel.innerHTML = `
+            <option value="ORG_MEMBER">ORG_MEMBER — Regular member</option>
+            <option value="ORG_ADMIN">ORG_ADMIN — Organization admin</option>
+            <option value="PLATFORM_ADMIN">PLATFORM_ADMIN — Platform admin</option>`;
+        roleHint.textContent = 'Select organization first to load available roles';
+        return;
+    }
+    try {
+        const roles = await apiFetch(`/api/v1/roles/org/${orgId}`);
+        roleSel.innerHTML = roles.map(r =>
+            `<option value="${r.name}">${r.name}${r.systemRole ? ' — System' : ''}</option>`
+        ).join('');
+        roleHint.textContent = `${roles.length} role(s) available for this organization`;
+    } catch (e) {
+        roleHint.textContent = 'Could not load roles — defaults will apply';
+    }
+}
+
+function renderTable(users) {
+    const tbody = document.getElementById('usersTable');
+    if (!users.length) {
+        tbody.innerHTML = `<tr><td colspan="${COLS}" class="text-center py-4 text-muted">No users found</td></tr>`;
+        return;
+    }
+    tbody.innerHTML = users.map(u => `
+        <tr data-email="${u.email}" data-status="${u.status}" data-orgid="${u.organizationId}">
+            <td class="ps-3"><strong>${u.email}</strong></td>
+            <td>${u.firstName} ${u.lastName}</td>
+            ${IS_PLATFORM_ADMIN ? `<td><span class="badge bg-light text-dark border">${orgMap[u.organizationId] ?? '—'}</span></td>` : ''}
+            <td><span class="badge bg-${STATUS_COLORS[u.status] ?? 'secondary'}">${u.status}</span></td>
+            <td><span class="badge bg-light text-dark border">${u.authProvider}</span></td>
+            <td>${(u.roles ?? []).map(r => `<span class="badge bg-info badge-role">${r.name ?? r}</span>`).join(' ') || '<span class="text-muted">—</span>'}</td>
+            <td class="text-muted small">${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'}</td>
+            <td class="pe-3">
+                ${u.status === 'ACTIVE'
+                    ? `<button class="btn btn-outline-warning btn-action me-1" onclick="suspendUser('${u.id}')">Suspend</button>`
+                    : u.status === 'SUSPENDED'
+                    ? `<button class="btn btn-outline-success btn-action me-1" onclick="activateUser('${u.id}')">Activate</button>`
+                    : ''}
+                <button class="btn btn-outline-secondary btn-action me-1" onclick="openEditModal('${u.id}')">Edit</button>
+                <button class="btn btn-outline-primary btn-action me-1" onclick="openRoleModal('${u.id}','${u.email}','${u.organizationId}')">Roles</button>
+                <button class="btn btn-outline-danger btn-action" onclick="deactivateUser('${u.id}','${u.email}')">Delete</button>
+            </td>
+        </tr>`).join('');
+}
+
+function renderPagination(data) {
+    document.getElementById('paginationInfo').textContent =
+        `Showing ${data.numberOfElements} of ${data.totalElements} users`;
+    const btns = document.getElementById('paginationButtons');
+    btns.innerHTML = '';
+    if (!data.first) btns.insertAdjacentHTML('beforeend',
+        `<button class="btn btn-sm btn-outline-secondary" onclick="loadUsers(${currentPage - 1})">← Prev</button>`);
+    if (!data.last) btns.insertAdjacentHTML('beforeend',
+        `<button class="btn btn-sm btn-outline-secondary" onclick="loadUsers(${currentPage + 1})">Next →</button>`);
+}
+
+function filterTable() {
+    const q   = document.getElementById('searchInput').value.toLowerCase();
+    const s   = document.getElementById('statusFilter').value;
+    const org = IS_PLATFORM_ADMIN ? (document.getElementById('orgFilter')?.value ?? '') : '';
+    renderTable(allUsers.filter(u =>
+        (!q   || u.email.toLowerCase().includes(q) || (u.firstName + u.lastName).toLowerCase().includes(q)) &&
+        (!s   || u.status === s) &&
+        (!org || u.organizationId === org)
+    ));
+}
+
+function openInviteModal() {
+    document.getElementById('i-email').value     = '';
+    document.getElementById('i-firstName').value = '';
+    document.getElementById('i-lastName').value  = '';
+    const orgSel = document.getElementById('i-orgId');
+    if (orgSel) orgSel.value = '';
+    // Reset role selector
+    const roleSel = document.getElementById('i-role');
+    roleSel.innerHTML = `
+        <option value="ORG_MEMBER">ORG_MEMBER — Regular member</option>
+        <option value="ORG_ADMIN">ORG_ADMIN — Organization admin</option>
+        <option value="PLATFORM_ADMIN">PLATFORM_ADMIN — Platform admin</option>`;
+    document.getElementById('i-role-hint').textContent = 'Select organization first to load available roles';
+    new bootstrap.Modal(document.getElementById('inviteModal')).show();
+}
+
+async function inviteUser() {
+    const email     = document.getElementById('i-email').value.trim();
+    const firstName = document.getElementById('i-firstName').value.trim();
+    const lastName  = document.getElementById('i-lastName').value.trim();
+    const orgSel    = document.getElementById('i-orgId');
+    const orgId     = orgSel ? orgSel.value : null;
+    const roleName  = document.getElementById('i-role').value;
+
+    if (!email || !firstName || !lastName) { showError('Email, first name and last name are required'); return; }
+    if (IS_PLATFORM_ADMIN && !orgId) { showError('Please select an organization'); return; }
+
+    const body = { email, firstName, lastName, roleNames: roleName ? [roleName] : [] };
+    if (orgId) body.organizationId = orgId;
+
+    try {
+        await apiFetch('/api/v1/users/invite', { method: 'POST', body: JSON.stringify(body) });
+        bootstrap.Modal.getInstance(document.getElementById('inviteModal')).hide();
+        showToast('Invitation sent to ' + email);
+        loadUsers(currentPage);
+    } catch (e) { showError(e.message); }
+}
+
+async function suspendUser(id) {
+    if (!confirm('Suspend this user?')) return;
+    try { await apiFetch(`/api/v1/users/${id}/suspend`, { method: 'POST' });
+          showToast('User suspended'); loadUsers(currentPage); }
+    catch (e) { showError(e.message); }
+}
+
+async function activateUser(id) {
+    try { await apiFetch(`/api/v1/users/${id}/activate`, { method: 'POST' });
+          showToast('User activated'); loadUsers(currentPage); }
+    catch (e) { showError(e.message); }
+}
+
+async function deactivateUser(id, email) {
+    if (!confirm(`Permanently deactivate ${email}? This cannot be undone.`)) return;
+    try { await apiFetch(`/api/v1/users/${id}`, { method: 'DELETE' });
+          showToast('User deactivated'); loadUsers(currentPage); }
+    catch (e) { showError(e.message); }
+}
+
+function openEditModal(userId) {
+    const u = allUsers.find(x => x.id === userId);
+    if (!u) return;
+    document.getElementById('e-userId').value    = u.id;
+    document.getElementById('e-email').value     = u.email;
+    document.getElementById('e-firstName').value = u.firstName;
+    document.getElementById('e-lastName').value  = u.lastName;
+    document.getElementById('e-avatarUrl').value = u.avatarUrl ?? '';
+    new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+
+async function saveUser() {
+    const userId    = document.getElementById('e-userId').value;
+    const email     = document.getElementById('e-email').value.trim();
+    const firstName = document.getElementById('e-firstName').value.trim();
+    const lastName  = document.getElementById('e-lastName').value.trim();
+    const avatarUrl = document.getElementById('e-avatarUrl').value.trim() || null;
+
+    if (!email || !firstName || !lastName) { showError('Email, first name and last name are required'); return; }
+
+    try {
+        await apiFetch(`/api/v1/users/${userId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ email, firstName, lastName, avatarUrl })
+        });
+        bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+        showToast('User updated');
+        loadUsers(currentPage);
+    } catch (e) { showError(e.message); }
+}
+
+async function openRoleModal(userId, email, orgId) {
+    document.getElementById('rm-userId').value  = userId;
+    document.getElementById('rm-orgId').value   = orgId;
+    document.getElementById('rm-userEmail').textContent = email;
+    const list = document.getElementById('rm-rolesList');
+    list.innerHTML = '<div class="text-muted small">Loading roles...</div>';
+    new bootstrap.Modal(document.getElementById('roleModal')).show();
+
+    const [user, roles] = await Promise.all([
+        apiFetch(`/api/v1/users/${userId}`),
+        orgId ? apiFetch(`/api/v1/roles/org/${orgId}`) : apiFetch('/api/v1/roles')
+    ]);
+    const userRoleIds = new Set((user.roles ?? []).map(r => r.id ?? r));
+
+    list.innerHTML = roles.map(r => `
+        <div class="d-flex align-items-center justify-content-between p-2 rounded border">
+            <div>
+                <strong class="small">${r.name}</strong>
+                ${r.systemRole ? '<span class="badge bg-secondary ms-1 badge-role">system</span>' : ''}
+                <div class="text-muted" style="font-size:.75rem">${r.description ?? ''}</div>
+            </div>
+            ${userRoleIds.has(r.id)
+                ? `<button class="btn btn-sm btn-outline-danger" onclick="removeRole('${userId}','${r.id}',this)">Remove</button>`
+                : `<button class="btn btn-sm btn-outline-success" onclick="assignRole('${userId}','${r.id}',this)">Assign</button>`
+            }
+        </div>`).join('');
+}
+
+async function assignRole(userId, roleId, btn) {
+    try { await apiFetch(`/api/v1/users/${userId}/roles/${roleId}`, { method: 'POST' });
+          btn.outerHTML = `<button class="btn btn-sm btn-outline-danger" onclick="removeRole('${userId}','${roleId}',this)">Remove</button>`;
+          showToast('Role assigned'); }
+    catch (e) { showError(e.message); }
+}
+
+async function removeRole(userId, roleId, btn) {
+    try { await apiFetch(`/api/v1/users/${userId}/roles/${roleId}`, { method: 'DELETE' });
+          btn.outerHTML = `<button class="btn btn-sm btn-outline-success" onclick="assignRole('${userId}','${roleId}',this)">Assign</button>`;
+          showToast('Role removed'); }
+    catch (e) { showError(e.message); }
+}
+
+if (IS_PLATFORM_ADMIN) {
+    Promise.all([loadUsers(), loadOrgs()]);
+} else {
+    loadUsers();
+}
+</script>
+</body>
+</html>

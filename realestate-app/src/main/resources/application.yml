@@ -1,0 +1,25 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: realestate-app
+  security:
+    oauth2:
+      client:
+        registration:
+          identity-platform:
+            client-id: realestate-web-client
+            client-secret: realestate-web-secret
+            scope: openid,profile,email
+            authorization-grant-type: authorization_code
+            redirect-uri: "http://localhost:8081/login/oauth2/code/identity-platform"
+            client-name: "Real Estate Management"
+        provider:
+          identity-platform:
+            # Endpoints configured explicitly — avoids issuer mismatch with localhost
+            authorization-uri: http://localhost:8080/oauth2/authorize
+            token-uri: http://localhost:8080/oauth2/token
+            jwk-set-uri: http://localhost:8080/oauth2/jwks
+            user-info-uri: http://localhost:8080/userinfo
+            user-name-attribute: sub

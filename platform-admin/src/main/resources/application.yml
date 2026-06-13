@@ -1,0 +1,67 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: platform-admin
+
+  threads:
+    virtual:
+      enabled: true   # Project Loom — I/O-bound proxy workload benefits significantly
+
+  thymeleaf:
+    cache: false
+
+  security:
+    oauth2:
+      client:
+        registration:
+          identity-platform:
+            client-id: platform-admin-client
+            client-secret: platform-admin-secret
+            scope: openid,profile,email
+            authorization-grant-type: authorization_code
+            redirect-uri: "http://localhost:8090/login/oauth2/code/identity-platform"
+        provider:
+          identity-platform:
+            authorization-uri: http://localhost:8080/oauth2/authorize
+            token-uri: http://localhost:8080/oauth2/token
+            jwk-set-uri: http://localhost:8080/oauth2/jwks
+            user-info-uri: http://localhost:8080/userinfo
+            user-name-attribute: sub
+
+  cloud:
+    gateway:
+      mvc:
+        routes:
+          # Admin operations → admin-service:8081
+          # Change URI to http://localhost:8080 until admin-service is deployed separately
+          - id: admin-api
+            uri: ${services.admin-api.base-url}
+            predicates:
+              - Path=/api/v1/users/**, /api/v1/organizations/**, /api/v1/roles/**
+            filters:
+              - TokenRelay=
+              - AddRequestHeader=X-Organization-Slug, platform
+
+          # OAuth2 client management stays in auth-server (Spring Authorization Server owns this)
+          - id: auth-clients
+            uri: ${services.auth-server.base-url}
+            predicates:
+              - Path=/api/v1/registered-clients/**
+            filters:
+              - TokenRelay=
+              - AddRequestHeader=X-Organization-Slug, platform
+
+services:
+  admin-api:
+    # Initially same as auth-server — change to http://localhost:8081 when admin-service is deployed
+    base-url: http://localhost:8080
+  auth-server:
+    base-url: http://localhost:8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('Roles')}"></head>
+<body class="d-flex">
+
+<div th:replace="~{fragments/layout :: sidebar}"></div>
+
+<main class="main-content">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h4 class="mb-0 fw-bold">Roles &amp; Permissions</h4>
+            <small class="text-muted" th:text="'Organization: ' + ${orgName}"></small>
+        </div>
+        <button class="btn btn-primary" onclick="openCreateModal()">
+            <i class="bi bi-plus-lg me-1"></i>New Role
+        </button>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-3">Name</th>
+                        <th>Description</th>
+                        <th>Type</th>
+                        <th>Permissions</th>
+                        <th class="pe-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="rolesTable">
+                    <tr><td colspan="5" class="text-center py-4 text-muted">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<!-- Create Role Modal -->
+<div class="modal fade" id="createModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">New Role</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body">
+                <div class="mb-3"><label class="form-label small fw-semibold">Name *</label>
+                    <input type="text" id="c-name" class="form-control" placeholder="BILLING_MANAGER"></div>
+                <div class="mb-3"><label class="form-label small fw-semibold">Description</label>
+                    <input type="text" id="c-desc" class="form-control" placeholder="Can manage billing"></div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Permissions <small class="text-muted">(comma-separated)</small></label>
+                    <input type="text" id="c-perms" class="form-control" placeholder="billing:read,billing:write">
+                    <div class="mt-2 d-flex flex-wrap gap-1" id="permsSuggestions">
+                        <small class="text-muted me-1">Suggestions:</small>
+                        <span th:each="p : ${ {'users:read','users:write','users:delete','roles:read','roles:write','billing:read','billing:write','audit:read','reports:read'} }"
+                              class="badge bg-light text-dark border" style="cursor:pointer"
+                              th:attr="data-perm=${p}" onclick="addPerm(this.dataset.perm)"
+                              th:text="${p}"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="createRole()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Permissions Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Edit Permissions</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body">
+                <input type="hidden" id="e-id">
+                <p class="fw-semibold" id="e-name"></p>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Permissions <small class="text-muted">(comma-separated)</small></label>
+                    <input type="text" id="e-perms" class="form-control">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" onclick="updatePermissions()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script th:replace="~{fragments/layout :: common-js}"></script>
+<script>
+async function loadRoles() {
+    try {
+        const roles = await apiFetch('/api/v1/roles');
+        renderTable(roles);
+    } catch (e) { showError('Failed to load roles: ' + e.message); }
+}
+
+function renderTable(roles) {
+    const tbody = document.getElementById('rolesTable');
+    if (!roles.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">No roles</td></tr>'; return; }
+    tbody.innerHTML = roles.map(r => `
+        <tr>
+            <td class="ps-3"><strong>${r.name}</strong></td>
+            <td class="text-muted small">${r.description ?? '—'}</td>
+            <td>${r.systemRole
+                ? '<span class="badge bg-dark">system</span>'
+                : '<span class="badge bg-primary">custom</span>'}</td>
+            <td>${r.permissions?.length
+                ? r.permissions.map(p => `<span class="badge bg-light text-dark border badge-role">${p}</span>`).join(' ')
+                : '<span class="text-muted small">none</span>'}</td>
+            <td class="pe-3">
+                ${!r.systemRole ? `
+                    <button class="btn btn-outline-secondary btn-action me-1" onclick="openEditModal('${r.id}','${r.name}','${(r.permissions??[]).join(',')}')">Edit</button>
+                    <button class="btn btn-outline-danger btn-action" onclick="deleteRole('${r.id}','${r.name}')">Delete</button>
+                ` : '<span class="text-muted small">Read-only</span>'}
+            </td>
+        </tr>`).join('');
+}
+
+function addPerm(p) {
+    const el = document.getElementById('c-perms');
+    const existing = el.value.split(',').map(x => x.trim()).filter(Boolean);
+    if (!existing.includes(p)) el.value = [...existing, p].join(',');
+}
+
+function openCreateModal() { new bootstrap.Modal(document.getElementById('createModal')).show(); }
+
+async function createRole() {
+    const name = document.getElementById('c-name').value.trim();
+    if (!name) { showError('Name is required'); return; }
+    const perms = document.getElementById('c-perms').value.split(',').map(p => p.trim()).filter(Boolean);
+    try {
+        await apiFetch('/api/v1/roles', { method: 'POST', body: JSON.stringify({
+            name, description: document.getElementById('c-desc').value.trim() || null, permissions: perms
+        })});
+        bootstrap.Modal.getInstance(document.getElementById('createModal')).hide();
+        showToast('Role created'); loadRoles();
+    } catch (e) { showError(e.message); }
+}
+
+function openEditModal(id, name, perms) {
+    document.getElementById('e-id').value = id;
+    document.getElementById('e-name').textContent = name;
+    document.getElementById('e-perms').value = perms;
+    new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+
+async function updatePermissions() {
+    const id = document.getElementById('e-id').value;
+    const perms = document.getElementById('e-perms').value.split(',').map(p => p.trim()).filter(Boolean);
+    try {
+        await apiFetch(`/api/v1/roles/${id}/permissions`, { method: 'PUT',
+            body: JSON.stringify({ permissions: perms }) });
+        bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+        showToast('Permissions updated'); loadRoles();
+    } catch (e) { showError(e.message); }
+}
+
+async function deleteRole(id, name) {
+    if (!confirm(`Delete role "${name}"?`)) return;
+    try { await apiFetch(`/api/v1/roles/${id}`, { method: 'DELETE' });
+          showToast('Role deleted'); loadRoles(); }
+    catch (e) { showError(e.message); }
+}
+
+loadRoles();
+</script>
+</body>
+</html>
