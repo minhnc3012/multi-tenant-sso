@@ -1,5 +1,5 @@
 server:
-  port: 8081
+  port: 8084
 
 spring:
   application:
@@ -13,7 +13,7 @@ spring:
             client-secret: realestate-web-secret
             scope: openid,profile,email
             authorization-grant-type: authorization_code
-            redirect-uri: "http://localhost:8081/login/oauth2/code/identity-platform"
+            redirect-uri: "http://localhost:8084/login/oauth2/code/identity-platform"
             client-name: "Real Estate Management"
         provider:
           identity-platform:

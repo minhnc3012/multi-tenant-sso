@@ -1,7 +1,7 @@
-package com.identityplatform.authserver.service;
+package com.identityplatform.adminservice.service;
 
-import com.identityplatform.authserver.domain.ClientType;
-import com.identityplatform.authserver.dto.ClientRegistrationDto;
+import com.identityplatform.adminservice.domain.ClientType;
+import com.identityplatform.adminservice.dto.ClientRegistrationDto;
 import com.identityplatform.organization.repository.OrganizationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

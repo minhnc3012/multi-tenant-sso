@@ -1,7 +1,7 @@
-package com.identityplatform.authserver.controller;
+package com.identityplatform.adminservice.controller;
 
-import com.identityplatform.authserver.dto.ClientRegistrationDto;
-import com.identityplatform.authserver.service.ClientRegistrationService;
+import com.identityplatform.adminservice.dto.ClientRegistrationDto;
+import com.identityplatform.adminservice.service.ClientRegistrationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;

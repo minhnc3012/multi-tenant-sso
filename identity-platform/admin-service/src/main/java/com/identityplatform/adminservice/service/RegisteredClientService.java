@@ -1,4 +1,4 @@
-package com.identityplatform.authserver.service;
+package com.identityplatform.adminservice.service;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;

@@ -1,7 +1,7 @@
-package com.identityplatform.authserver.controller;
+package com.identityplatform.adminservice.controller;
 
-import com.identityplatform.authserver.service.RegisteredClientMetadataService;
-import com.identityplatform.authserver.service.RegisteredClientService;
+import com.identityplatform.adminservice.service.RegisteredClientMetadataService;
+import com.identityplatform.adminservice.service.RegisteredClientService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;

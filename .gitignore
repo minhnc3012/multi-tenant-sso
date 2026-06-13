@@ -4,6 +4,9 @@ target/
 *.jar
 *.war
 
+# Claude Code local session state
+.claude/
+
 # Node / JS
 node_modules/
 dist/

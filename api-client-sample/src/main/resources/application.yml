@@ -26,3 +26,4 @@ spring:
 
 identity-platform:
   base-url: http://localhost:8080
+  management-base-url: http://localhost:8081

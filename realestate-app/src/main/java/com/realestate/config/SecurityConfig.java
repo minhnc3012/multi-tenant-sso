@@ -20,7 +20,7 @@ import java.io.IOException;
 public class SecurityConfig {
 
     private static final String IDP_LOGOUT_URL      = "http://localhost:8080/connect/logout";
-    private static final String POST_LOGOUT_REDIRECT = "http://localhost:8081/";
+    private static final String POST_LOGOUT_REDIRECT = "http://localhost:8084/";
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {

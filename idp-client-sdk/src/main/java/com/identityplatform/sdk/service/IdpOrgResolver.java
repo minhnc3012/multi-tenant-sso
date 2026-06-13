@@ -40,7 +40,7 @@ public class IdpOrgResolver {
 
     @SuppressWarnings("unchecked")
     private UUID resolve() {
-        String url = props.baseUrl() + "/api/v1/organizations/slug/" + props.orgSlug();
+        String url = props.resolvedManagementBaseUrl() + "/api/v1/organizations/slug/" + props.orgSlug();
         log.info("[IdpSDK] Resolving org UUID for slug '{}'", props.orgSlug());
         try {
             Map<String, Object> resp = webClient.get()

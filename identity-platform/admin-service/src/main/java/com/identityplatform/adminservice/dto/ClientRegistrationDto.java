@@ -1,6 +1,6 @@
-package com.identityplatform.authserver.dto;
+package com.identityplatform.adminservice.dto;
 
-import com.identityplatform.authserver.domain.ClientType;
+import com.identityplatform.adminservice.domain.ClientType;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 

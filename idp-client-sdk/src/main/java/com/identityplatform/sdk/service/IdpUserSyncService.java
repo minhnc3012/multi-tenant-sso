@@ -43,7 +43,7 @@ public class IdpUserSyncService {
 
     public IdpUserResponse createUser(IdpCreateUserRequest request) {
         UUID orgId = orgResolver.getOrgId();
-        String url = props.baseUrl() + "/api/v1/users/provision/" + orgId;
+        String url = props.resolvedManagementBaseUrl() + "/api/v1/users/provision/" + orgId;
         log.debug("[IdpSDK] Provisioning user {} in org {}", request.email(), orgId);
         try {
             return webClient.post()
@@ -60,7 +60,7 @@ public class IdpUserSyncService {
     }
 
     public IdpUserResponse updateUser(UUID idpUserId, IdpCreateUserRequest request) {
-        String url = props.baseUrl() + "/api/v1/users/" + idpUserId;
+        String url = props.resolvedManagementBaseUrl() + "/api/v1/users/" + idpUserId;
         log.debug("[IdpSDK] Updating IDP user {}", idpUserId);
         try {
             return webClient.put()
@@ -77,7 +77,7 @@ public class IdpUserSyncService {
     }
 
     public void deactivateUser(UUID idpUserId) {
-        String url = props.baseUrl() + "/api/v1/users/" + idpUserId;
+        String url = props.resolvedManagementBaseUrl() + "/api/v1/users/" + idpUserId;
         log.info("[IdpSDK] Deactivating IDP user {}", idpUserId);
         try {
             webClient.delete()
@@ -101,7 +101,7 @@ public class IdpUserSyncService {
         int page = 0;
         boolean last = false;
         while (!last) {
-            String url = props.baseUrl()
+            String url = props.resolvedManagementBaseUrl()
                     + "/api/v1/users/org/" + orgId
                     + "?page=" + page + "&size=100&sort=createdAt,asc";
             try {

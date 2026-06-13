@@ -1,4 +1,4 @@
-package com.identityplatform.authserver.controller;
+package com.identityplatform.adminservice.controller;
 
 import com.identityplatform.core.audit.AuditEventType;
 import com.identityplatform.core.audit.AuditLog;

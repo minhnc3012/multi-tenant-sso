@@ -23,30 +23,30 @@ public class IdentityPlatformClient {
     private final M2MTokenService tokenService;
     private final RestTemplate    restTemplate = new RestTemplate();
 
-    @Value("${identity-platform.base-url}")
-    private String baseUrl;
+    @Value("${identity-platform.management-base-url}")
+    private String managementBaseUrl;
 
     /** GET /api/v1/organizations/{orgId}/clients — list registered clients of an org */
     public List<Map<String, Object>> listOrgClients(String orgId) {
-        return get("/api/v1/organizations/" + orgId + "/clients",
+        return get(managementBaseUrl, "/api/v1/organizations/" + orgId + "/clients",
                 new ParameterizedTypeReference<>() {});
     }
 
     /** GET /api/v1/audit-logs — recent audit events (org scoped by token) */
     public List<Map<String, Object>> listAuditLogs() {
-        return get("/api/v1/audit-logs",
+        return get(managementBaseUrl, "/api/v1/audit-logs",
                 new ParameterizedTypeReference<>() {});
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
 
-    private <T> T get(String path, ParameterizedTypeReference<T> type) {
+    private <T> T get(String base, String path, ParameterizedTypeReference<T> type) {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(tokenService.getAccessToken());
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
         ResponseEntity<T> response = restTemplate.exchange(
-                baseUrl + path, HttpMethod.GET, new HttpEntity<>(headers), type);
+                base + path, HttpMethod.GET, new HttpEntity<>(headers), type);
 
         log.debug("[M2M] GET {} → {}", path, response.getStatusCode());
         return response.getBody();

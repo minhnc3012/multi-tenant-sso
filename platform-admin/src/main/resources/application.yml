@@ -34,29 +34,27 @@ spring:
     gateway:
       mvc:
         routes:
-          # Admin operations → admin-service:8081
-          # Change URI to http://localhost:8080 until admin-service is deployed separately
+          # Management API (admin-service) - users, orgs, roles, registered-clients, audit-logs
           - id: admin-api
             uri: ${services.admin-api.base-url}
             predicates:
-              - Path=/api/v1/users/**, /api/v1/organizations/**, /api/v1/roles/**
+              - Path=/api/v1/users/**, /api/v1/organizations/**, /api/v1/roles/**, /api/v1/registered-clients/**, /api/v1/audit-logs/**
             filters:
               - TokenRelay=
               - AddRequestHeader=X-Organization-Slug, platform
 
-          # OAuth2 client management stays in auth-server (Spring Authorization Server owns this)
-          - id: auth-clients
+          # Authentication API (auth-server) - session/token-bound endpoints
+          - id: auth-api
             uri: ${services.auth-server.base-url}
             predicates:
-              - Path=/api/v1/registered-clients/**
+              - Path=/api/v1/auth/**
             filters:
               - TokenRelay=
               - AddRequestHeader=X-Organization-Slug, platform
 
 services:
   admin-api:
-    # Initially same as auth-server — change to http://localhost:8081 when admin-service is deployed
-    base-url: http://localhost:8080
+    base-url: http://localhost:8081
   auth-server:
     base-url: http://localhost:8080
 

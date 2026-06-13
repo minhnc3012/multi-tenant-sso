@@ -68,6 +68,15 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- JdbcRegisteredClientRepository for managing OAuth2 registered clients
+             (shared oauth2_registered_client table; auth-server owns the Flyway schema).
+             Does NOT activate OAuth2AuthorizationServerAutoConfiguration since admin-service
+             has no AuthorizationServerSettings bean and does not call applyDefaultSecurity(). -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-authorization-server</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

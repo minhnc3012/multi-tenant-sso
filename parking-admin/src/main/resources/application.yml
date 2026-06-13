@@ -48,6 +48,7 @@ server:
 idp:
   client:
     base-url: ${IDP_BASE_URL:http://localhost:8080}
+    management-base-url: ${IDP_MANAGEMENT_BASE_URL:http://localhost:8081}
     client-id: parking-admin-api-client
     client-secret: ${PARKING_ADMIN_API_CLIENT_SECRET:parking-admin-api-secret}
     org-slug: ${IDP_ORG_SLUG:kerb}
